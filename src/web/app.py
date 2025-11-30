@@ -140,9 +140,16 @@ async def api_move(payload: dict):
 @app.get("/api/state")
 async def get_state():
     suggestion = await suggest_move()
+    san_stack = []
+    temp = chess.Board()
+    for mv in board.move_stack:
+        san_stack.append(temp.san(mv))
+        temp.push(mv)
     return {
         "fen": board.fen(),
         "turn": "white" if board.turn == chess.WHITE else "black",
+        "move_stack": [m.uci() for m in board.move_stack],
+        "san_stack": san_stack,
         "legal_moves": [m.uci() for m in board.legal_moves],
         "is_game_over": board.is_game_over(),
         "result": board.result() if board.is_game_over() else None,
@@ -163,6 +170,19 @@ async def api_reset(payload: dict):
         board = chess.Board(fen) if fen else chess.Board()
     except Exception as e:
         raise HTTPException(400, f"Invalid FEN: {e}")
+    return await get_state()
+
+@app.post("/api/undo")
+async def api_undo():
+    if board.move_stack:
+        board.pop()
+    return await get_state()
+
+@app.post("/api/goto")
+async def api_goto(payload: dict):
+    ply = int(payload.get("ply", 0))
+    while len(board.move_stack) > ply:
+        board.pop()
     return await get_state()
 
 # --- Evaluation / Match placeholders ---
