@@ -268,11 +268,14 @@ def main():
         samples = self_play(net, mcts, games=args.games_per_epoch)
         for s, p, v in samples:
             buffer.add((s, p, v))
+        loss = 0.0
         if len(buffer) >= args.batch_size:
             batch = buffer.sample(args.batch_size)
             loss, lp, lv = train_step(net, optimizer, batch, device=device)
-            log_metrics(epoch, win_rate=0.0, loss=loss)
             print(f"Epoch {epoch}: loss={loss:.4f} (p={lp:.4f}, v={lv:.4f}), buffer={len(buffer)}")
+        # Log metrics even if no train step yet
+        games_played = len(samples)
+        log_metrics(epoch, win_rate=0.0, loss=loss)
         if epoch % args.save_every == 0:
             args.save_dir.mkdir(parents=True, exist_ok=True)
             torch.save(

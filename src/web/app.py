@@ -16,6 +16,10 @@ EVAL_HISTORY_PATH = Path("data/eval/history.json")
 async def health_check():
     return Response(status_code=204)
 
+@app.get("/favicon.ico", include_in_schema=False)
+async def favicon():
+    return Response(status_code=204)
+
 
 @app.get("/", response_class=HTMLResponse)
 async def index():
