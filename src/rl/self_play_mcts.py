@@ -29,6 +29,11 @@ def load_move_encoder(path: Path) -> Tuple[List[str], Dict[str, int]]:
     return idx_to_move, move_to_idx
 
 
+def mirror_move(move: chess.Move) -> chess.Move:
+    """Mirror a move for black/white perspective flip."""
+    return chess.Move(chess.square_mirror(move.from_square), chess.square_mirror(move.to_square), promotion=move.promotion)
+
+
 @dataclass
 class Node:
     prior: float
@@ -92,8 +97,8 @@ class MCTS:
         root = Node(prior=1.0, children={})
 
         # Initialize root expansion
-        logits, _ = self._forward(board, root_history)
-        self._set_children_from_logits(root, board, logits)
+        logits, flipped = self._forward(board, root_history)
+        self._set_children_from_logits(root, board if not flipped else board.mirror(), logits, flipped)
 
         total_sims = sims if sims is not None else self.sims
         pending: List[Tuple[Node, chess.Board, List[chess.Board], List[Node]]] = []
@@ -157,11 +162,16 @@ class MCTS:
     def _process_leaves(self, leaves: List[Tuple[Node, chess.Board, List[chess.Board], List[Node]]]):
         if not leaves:
             return
-        tensors = [get_input_tensor(b, h).to(self.device) for _, b, h, _ in leaves]
-        batch = torch.stack(tensors)
+        tensors = []
+        flips = []
+        for _, b, h, _ in leaves:
+            t, flipped = get_input_tensor(b, h)
+            tensors.append(t)
+            flips.append(flipped)
+        batch = torch.stack([t.to(self.device) for t in tensors])
         logits_batch, values_batch = self.net(batch)
-        for (node, b, _, path_nodes), logits, value in zip(leaves, logits_batch, values_batch):
-            self._set_children_from_logits(node, b, logits)
+        for (node, b, _, path_nodes), logits, value, flipped in zip(leaves, logits_batch, values_batch, flips):
+            self._set_children_from_logits(node, b if not flipped else b.mirror(), logits, flipped)
             self._backup(path_nodes, float(value.item()))
 
     def _select(self, node: Node) -> Tuple[str, Node]:
@@ -176,9 +186,9 @@ class MCTS:
                 best = (key, child)
         return best
 
-    def _set_children_from_logits(self, node: Node, board: chess.Board, logits: torch.Tensor):
-        masked = self.get_masked_logits(board, logits)
-        pairs = self._legal_indices(board)
+    def _set_children_from_logits(self, node: Node, board: chess.Board, logits: torch.Tensor, flipped: bool):
+        masked = self.get_masked_logits(board if not flipped else board.mirror(), logits)
+        pairs = self._legal_indices(board if not flipped else board.mirror())
         node.children = {}
         if not pairs:
             return
@@ -186,7 +196,11 @@ class MCTS:
         total_prior = 0.0
         for mv, idx in pairs:
             p = float(priors[idx])
-            node.children[mv.uci()] = Node(prior=p, children={}, move=mv)
+            uci = mv.uci()
+            if flipped:
+                # mirror move back to original orientation
+                uci = mirror_move(mv).uci()
+            node.children[uci] = Node(prior=p, children={}, move=mv)
             total_prior += p
         if total_prior > 0:
             for child in node.children.values():
@@ -198,10 +212,11 @@ class MCTS:
             n.value_sum += value
             value = -value
 
-    def _forward(self, board: chess.Board, history: List[chess.Board]) -> Tuple[torch.Tensor, torch.Tensor]:
-        t = get_input_tensor(board, history).unsqueeze(0).to(self.device)
+    def _forward(self, board: chess.Board, history: List[chess.Board]) -> Tuple[torch.Tensor, torch.Tensor, bool]:
+        t, flipped = get_input_tensor(board, history)
+        t = t.unsqueeze(0).to(self.device)
         logits, value = self.net(t)
-        return logits.squeeze(0), value.squeeze(0)
+        return logits.squeeze(0), value.squeeze(0), flipped
 
 
 class ReplayBuffer:
@@ -233,9 +248,11 @@ def self_play(
         states = []
         policies = []
         players = []
+        move_count = 0
         while not b.is_game_over():
             pi = torch.tensor(mcts.run(b, history_states), dtype=torch.float32)
-            states.append(get_input_tensor(b, history_states))
+            state, _ = get_input_tensor(b, history_states)
+            states.append(state)
             policies.append(pi)
             players.append(1 if b.turn == chess.WHITE else -1)
             legal = list(b.legal_moves)
@@ -248,9 +265,14 @@ def self_play(
                 probs = torch.ones(len(legal_pairs), dtype=torch.float32) / len(legal_pairs)
             else:
                 probs = probs / probs.sum()
-            choice = torch.multinomial(probs, 1).item()
+            # Temperature scheduling: sample early, argmax later
+            if move_count < 30:
+                choice = torch.multinomial(probs, 1).item()
+            else:
+                choice = int(torch.argmax(probs).item())
             b.push(legal_pairs[choice][0])
             history_states.append(b.copy(stack=False))
+            move_count += 1
         res = b.result()
         z = 0.0 if res == "1/2-1/2" else (1.0 if res == "1-0" else -1.0)
         for s, p, pl in zip(states, policies, players):

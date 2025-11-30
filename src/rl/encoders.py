@@ -1,10 +1,10 @@
 import chess
 import numpy as np
 import torch
-from typing import List
+from typing import List, Tuple
 
 
-def get_input_tensor(board: chess.Board, history: List[chess.Board] | None = None) -> torch.Tensor:
+def get_input_tensor(board: chess.Board, history: List[chess.Board] | None = None) -> Tuple[torch.Tensor, bool]:
     """
     Build a 119-plane AlphaZero-style tensor.
     - 8 historical boards, each with 12 planes (6 pieces x 2 colors) = 96
@@ -14,12 +14,20 @@ def get_input_tensor(board: chess.Board, history: List[chess.Board] | None = Non
         1 move count (normalized)
         2 repetition flags (>=1, >=2)
         15 zero padding planes to reach 119
+    Returns (tensor, flipped) where flipped indicates if the board was mirrored (Black to move).
     """
     if history is None:
         history = [board]
 
+    # Canonical orientation: always from the side to move (mirror if Black)
+    should_flip = board.turn == chess.BLACK
+    if should_flip:
+        history_states = [h.mirror() for h in history]
+    else:
+        history_states = list(history)
+
     # Keep last 8 states; pad with oldest if needed
-    history_states = list(history)[-8:]
+    history_states = history_states[-8:]
     if len(history_states) < 8:
         history_states = [history_states[0]] * (8 - len(history_states)) + history_states
 
@@ -37,21 +45,22 @@ def get_input_tensor(board: chess.Board, history: List[chess.Board] | None = Non
 
     meta = np.zeros((8, 8, 8), dtype=np.float32)
     # Castling rights
-    if board.has_kingside_castling_rights(chess.WHITE):
+    ref_board = history_states[-1]
+    if ref_board.has_kingside_castling_rights(chess.WHITE):
         meta[0] = 1
-    if board.has_queenside_castling_rights(chess.WHITE):
+    if ref_board.has_queenside_castling_rights(chess.WHITE):
         meta[1] = 1
-    if board.has_kingside_castling_rights(chess.BLACK):
+    if ref_board.has_kingside_castling_rights(chess.BLACK):
         meta[2] = 1
-    if board.has_queenside_castling_rights(chess.BLACK):
+    if ref_board.has_queenside_castling_rights(chess.BLACK):
         meta[3] = 1
     # Side to move
-    meta[4] = 1 if board.turn == chess.WHITE else 0
+    meta[4] = 1  # always white-to-move in canonical orientation
     # Move count normalized
-    meta[5] = min(len(board.move_stack) / 200.0, 1.0)
+    meta[5] = min(len(ref_board.move_stack) / 200.0, 1.0)
     # Repetition flags (approx)
-    meta[6] = 1 if board.is_repetition(2) else 0
-    meta[7] = 1 if board.is_repetition(3) else 0
+    meta[6] = 1 if ref_board.is_repetition(2) else 0
+    meta[7] = 1 if ref_board.is_repetition(3) else 0
 
     planes.append(meta)
 
@@ -62,4 +71,4 @@ def get_input_tensor(board: chess.Board, history: List[chess.Board] | None = Non
     elif stack.shape[0] > 119:
         stack = stack[:119]
 
-    return torch.from_numpy(stack).float()
+    return torch.from_numpy(stack).float(), should_flip
