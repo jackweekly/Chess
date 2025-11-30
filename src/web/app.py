@@ -232,8 +232,6 @@ async def api_load_model(payload: dict):
     moves_path = Path(payload.get("moves_path", "data/processed/supervised/label_encoder_classes.npy"))
     if not path.exists():
         raise HTTPException(400, "Model not found")
-    if not moves_path.exists():
-        raise HTTPException(400, "Move list not found")
 
     global policy_model, mcts_instance, idx_to_move, move_to_idx
     ckpt = torch.load(path, map_location=policy_device)
@@ -241,6 +239,8 @@ async def api_load_model(payload: dict):
         idx_to_move = [str(x) for x in ckpt["moves"]]
         move_to_idx = {uci: i for i, uci in enumerate(idx_to_move)}
     else:
+        if not moves_path.exists():
+            raise HTTPException(400, "Move list not found and checkpoint missing embedded moves")
         idx_to_move, move_to_idx = load_move_encoder(moves_path)
     action_size = len(idx_to_move)
     model = AlphaZeroNet(
