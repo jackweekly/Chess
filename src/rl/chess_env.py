@@ -4,7 +4,7 @@ import chess
 from gymnasium import spaces
 from typing import List
 
-from .self_play_mcts import get_extensive_board_tensor
+from .encoders import get_input_tensor
 
 class ChessEnv(gym.Env):
     """
@@ -25,8 +25,8 @@ class ChessEnv(gym.Env):
         # We ignore underpromotions for simplicity (always promote to Queen)
         self.action_space = spaces.Discrete(64 * 64)
         
-        # Observation space: 103 planes (8 x 12 piece history + 7 metadata)
-        self.observation_space = spaces.Box(low=0, high=1, shape=(103, 8, 8), dtype=np.float32)
+        # Observation space: 119 planes (AlphaZero-style history + metadata)
+        self.observation_space = spaces.Box(low=0, high=1, shape=(119, 8, 8), dtype=np.float32)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
@@ -87,7 +87,7 @@ class ChessEnv(gym.Env):
 
     def _get_obs(self):
         # Reuse the AlphaZero-style tensor and return numpy for Gym.
-        return get_extensive_board_tensor(self.board, self.history).numpy()
+        return get_input_tensor(self.board, self.history).numpy()
 
     def _get_info(self):
         return {

@@ -1,6 +1,7 @@
 """
-Minimal self-play + MCTS training loop (AlphaZero-style, simplified).
-This is a baseline scaffold: single process, replay buffer, no distributed actors.
+Self-play + MCTS training loop (AlphaZero-style) using a ResNet policy/value network.
+Supports 119-plane inputs, 4672-class move space (from supervised label encoder),
+and batched leaf evaluation for faster MCTS.
 """
 
 import argparse
@@ -9,74 +10,23 @@ import random
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 
 import chess
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from src.models.supervised_baseline import AlphaZeroNet
+
+from src.models.alphazero import AlphaZeroNet
+from src.rl.encoders import get_input_tensor
 
 
-def move_to_index(move: chess.Move) -> int:
-    """Map a move to a flat 4096 index (from_square * 64 + to_square). Promotions share the same index."""
-    return move.from_square * 64 + move.to_square
-
-
-def get_extensive_board_tensor(board: chess.Board, history: List[chess.Board] | None = None) -> torch.Tensor:
-    """
-    AlphaZero-style encoding with temporal context and metadata.
-    - 8 historical board states (12 planes each: 6 pieces x 2 colors) = 96 planes
-    - +7 metadata planes (castling rights, side to move, repetition flag, move count) = 103 planes total
-    """
-    if history is None:
-        history = [board]
-
-    # Keep the last 8 states; pad with the oldest if shorter.
-    history_states = list(history)[-8:]
-    if len(history_states) < 8:
-        history_states = [history_states[0]] * (8 - len(history_states)) + history_states
-
-    planes: list[np.ndarray] = []
-
-    # Piece planes for each historical board.
-    for b in history_states:
-        board_planes = np.zeros((12, 8, 8), dtype=np.float32)
-        for sq in chess.SQUARES:
-            p = b.piece_at(sq)
-            if p:
-                idx = (p.color * 6) + (p.piece_type - 1)
-                board_planes[idx, sq // 8, sq % 8] = 1.0
-        planes.append(board_planes)
-
-    # Metadata planes for the current board only.
-    meta_planes = np.zeros((7, 8, 8), dtype=np.float32)
-    if board.has_kingside_castling_rights(chess.WHITE):
-        meta_planes[0, :, :] = 1
-    if board.has_queenside_castling_rights(chess.WHITE):
-        meta_planes[1, :, :] = 1
-    if board.has_kingside_castling_rights(chess.BLACK):
-        meta_planes[2, :, :] = 1
-    if board.has_queenside_castling_rights(chess.BLACK):
-        meta_planes[3, :, :] = 1
-    if board.turn == chess.WHITE:
-        meta_planes[4, :, :] = 1
-    if board.is_repetition(2):
-        meta_planes[5, :, :] = 1
-    meta_planes[6, :, :] = min(len(board.move_stack) / 100.0, 1.0)
-
-    planes.append(meta_planes)
-
-    full_stack = np.concatenate(planes, axis=0)
-    return torch.from_numpy(full_stack).float()
-
-# Backwards-compatible alias; previous code referenced board_to_tensor.
-board_to_tensor = get_extensive_board_tensor
-
-
-# Backwards-compatible alias pointing to the stronger ResNet-based model.
-PolicyValueNet = AlphaZeroNet
+def load_move_encoder(path: Path) -> Tuple[List[str], Dict[str, int]]:
+    classes = np.load(path, allow_pickle=True)
+    idx_to_move = [str(x) for x in classes.tolist()]
+    move_to_idx = {uci: i for i, uci in enumerate(idx_to_move)}
+    return idx_to_move, move_to_idx
 
 
 @dataclass
@@ -84,81 +34,135 @@ class Node:
     prior: float
     visit: int = 0
     value_sum: float = 0.0
-    children: Dict[str, "Node"] = None
-    move: chess.Move = None
+    children: Dict[str, "Node"] | None = None
+    move: chess.Move | None = None
 
     def value(self) -> float:
         return self.value_sum / self.visit if self.visit > 0 else 0.0
 
 
 class MCTS:
-    def __init__(self, net: PolicyValueNet, device: torch.device, sims: int = 64, c_puct: float = 1.4):
+    def __init__(
+        self,
+        net: AlphaZeroNet,
+        device: torch.device,
+        sims: int = 64,
+        c_puct: float = 1.4,
+        move_to_idx: Dict[str, int] | None = None,
+        idx_to_move: List[str] | None = None,
+        batch_size: int = 64,
+    ):
         self.net = net
         self.device = device
         self.sims = sims
         self.c_puct = c_puct
+        self.move_to_idx = move_to_idx or {}
+        self.idx_to_move = idx_to_move or []
+        self.action_size = len(self.idx_to_move)
+        self.batch_size = batch_size
+
+    def _legal_indices(self, board: chess.Board) -> List[Tuple[chess.Move, int]]:
+        pairs = []
+        for mv in board.legal_moves:
+            idx = self.move_to_idx.get(mv.uci())
+            if idx is not None:
+                pairs.append((mv, idx))
+        return pairs
 
     def get_masked_logits(self, board: chess.Board, logits: torch.Tensor) -> torch.Tensor:
-        """Mask illegal moves to a large negative value so softmax ignores them."""
-        mask = torch.full_like(logits, -1e9)
-        legal_indices = [move_to_index(m) for m in board.legal_moves]
+        """Mask illegal or unknown moves to large negative values."""
+        mask = torch.full((self.action_size,), -1e9, device=logits.device, dtype=logits.dtype)
+        pairs = self._legal_indices(board)
+        if not pairs:
+            return mask
+        legal_indices = [idx for _, idx in pairs]
         mask[legal_indices] = logits[legal_indices]
         return mask
 
-    def run(self, board: chess.Board, history: List[chess.Board] | None = None, sims: int | None = None) -> List[float]:
+    def run(
+        self,
+        board: chess.Board,
+        history: List[chess.Board] | None = None,
+        sims: Optional[int] = None,
+    ) -> List[float]:
+        if self.action_size == 0:
+            raise ValueError("MCTS missing move encoder (action_size=0)")
+
         root_history = [b.copy(stack=False) for b in (history or [board])]
         root = Node(prior=1.0, children={})
-        self._expand(root, board, root_history)
+
+        # Initialize root expansion
+        logits, _ = self._forward(board, root_history)
+        self._set_children_from_logits(root, board, logits)
+
         total_sims = sims if sims is not None else self.sims
-        for _ in range(total_sims):
+        pending: List[Tuple[Node, chess.Board, List[chess.Board], List[Node]]] = []
+
+        for sim in range(total_sims):
             b_copy = board.copy()
             history_states = list(root_history)
             node = root
-            path = []
-            # select
+            path_nodes = [root]
+
+            # Selection
             while node.children:
                 key, node = self._select(node)
-                b_copy.push(chess.Move.from_uci(key))
+                mv = chess.Move.from_uci(key)
+                b_copy.push(mv)
                 history_states.append(b_copy.copy(stack=False))
-                path.append(node)
-            # expand/evaluate
-            if not b_copy.is_game_over():
-                self._expand(node, b_copy, history_states)
-                value = self._evaluate(b_copy, history_states)
-            else:
+                path_nodes.append(node)
+
+            # Terminal check
+            if b_copy.is_game_over():
                 res = b_copy.result()
                 value = 0.0 if res == "1/2-1/2" else (1.0 if res == "1-0" else -1.0)
-            # backup
-            for n in path:
-                n.visit += 1
-                n.value_sum += value
-                value = -value
-        # build policy target
-        visits = np.zeros(4096, dtype=np.float32)
-        legal = list(board.legal_moves)
-        for mv in legal:
-            key = mv.uci()
-            if key in root.children:
-                visits[move_to_index(mv)] = root.children[key].visit
+                self._backup(path_nodes, value)
+            else:
+                pending.append((node, b_copy, history_states, path_nodes))
+
+            # Process batch
+            if len(pending) >= self.batch_size or sim == total_sims - 1:
+                self._process_leaves(pending)
+                pending = []
+
+        visits = np.zeros(self.action_size, dtype=np.float32)
+        for uci, child in (root.children or {}).items():
+            idx = self.move_to_idx.get(uci)
+            if idx is not None:
+                visits[idx] = child.visit
         total = visits.sum()
         if total > 0:
             visits /= total
         return visits.tolist()
 
-    def get_best_move(self, board: chess.Board, history: List[chess.Board] | None = None, sims: int | None = None) -> str:
-        """Runs MCTS and returns the UCI of the most visited legal move."""
+    def get_best_move(
+        self, board: chess.Board, history: List[chess.Board] | None = None, sims: Optional[int] = None
+    ) -> str:
         visits = self.run(board, history=history, sims=sims)
         legal = list(board.legal_moves)
-        if not legal:
-            raise ValueError("No legal moves available")
-        best_move = legal[0]
+        best_move = None
         best_score = -1.0
         for mv in legal:
-            score = visits[move_to_index(mv)]
+            idx = self.move_to_idx.get(mv.uci())
+            if idx is None:
+                continue
+            score = visits[idx]
             if score > best_score:
                 best_score = score
                 best_move = mv
+        if best_move is None:
+            raise ValueError("No legal moves mapped in encoder")
         return best_move.uci()
+
+    def _process_leaves(self, leaves: List[Tuple[Node, chess.Board, List[chess.Board], List[Node]]]):
+        if not leaves:
+            return
+        tensors = [get_input_tensor(b, h).to(self.device) for _, b, h, _ in leaves]
+        batch = torch.stack(tensors)
+        logits_batch, values_batch = self.net(batch)
+        for (node, b, _, path_nodes), logits, value in zip(leaves, logits_batch, values_batch):
+            self._set_children_from_logits(node, b, logits)
+            self._backup(path_nodes, float(value.item()))
 
     def _select(self, node: Node) -> Tuple[str, Node]:
         total = math.sqrt(sum(child.visit for child in node.children.values()) + 1)
@@ -172,22 +176,30 @@ class MCTS:
                 best = (key, child)
         return best
 
-    def _expand(self, node: Node, board: chess.Board, history: List[chess.Board]):
-        logits, _ = self._forward(board, history)
-        masked_logits = self.get_masked_logits(board, logits)
-        priors = torch.softmax(masked_logits, dim=0).detach().cpu().numpy()
-        legal = list(board.legal_moves)
+    def _set_children_from_logits(self, node: Node, board: chess.Board, logits: torch.Tensor):
+        masked = self.get_masked_logits(board, logits)
+        pairs = self._legal_indices(board)
         node.children = {}
-        for mv in legal:
-            idx = move_to_index(mv)
-            node.children[mv.uci()] = Node(prior=float(priors[idx]), children={}, move=mv)
+        if not pairs:
+            return
+        priors = torch.softmax(masked, dim=0).detach().cpu().numpy()
+        total_prior = 0.0
+        for mv, idx in pairs:
+            p = float(priors[idx])
+            node.children[mv.uci()] = Node(prior=p, children={}, move=mv)
+            total_prior += p
+        if total_prior > 0:
+            for child in node.children.values():
+                child.prior /= total_prior
 
-    def _evaluate(self, board: chess.Board, history: List[chess.Board]) -> float:
-        _, v = self._forward(board, history)
-        return float(v.item())
+    def _backup(self, path_nodes: List[Node], value: float):
+        for n in reversed(path_nodes):
+            n.visit += 1
+            n.value_sum += value
+            value = -value
 
     def _forward(self, board: chess.Board, history: List[chess.Board]) -> Tuple[torch.Tensor, torch.Tensor]:
-        t = get_extensive_board_tensor(board, history).unsqueeze(0).to(self.device)
+        t = get_input_tensor(board, history).unsqueeze(0).to(self.device)
         logits, value = self.net(t)
         return logits.squeeze(0), value.squeeze(0)
 
@@ -208,7 +220,12 @@ class ReplayBuffer:
         return len(self.buf)
 
 
-def self_play(net: PolicyValueNet, mcts: MCTS, device: torch.device, games: int) -> List[Tuple[torch.Tensor, torch.Tensor, float]]:
+def self_play(
+    net: AlphaZeroNet,
+    mcts: MCTS,
+    device: torch.device,
+    games: int,
+) -> List[Tuple[torch.Tensor, torch.Tensor, float]]:
     samples = []
     for _ in range(games):
         b = chess.Board()
@@ -218,18 +235,21 @@ def self_play(net: PolicyValueNet, mcts: MCTS, device: torch.device, games: int)
         players = []
         while not b.is_game_over():
             pi = torch.tensor(mcts.run(b, history_states), dtype=torch.float32)
-            states.append(get_extensive_board_tensor(b, history_states))
+            states.append(get_input_tensor(b, history_states))
             policies.append(pi)
             players.append(1 if b.turn == chess.WHITE else -1)
             legal = list(b.legal_moves)
-            legal_indices = [move_to_index(mv) for mv in legal]
-            legal_probs = pi[legal_indices]
-            if legal_probs.sum() <= 0:
-                legal_probs = torch.ones(len(legal), dtype=torch.float32) / len(legal)
+            legal_indices = [mcts.move_to_idx.get(mv.uci()) for mv in legal]
+            legal_pairs = [(mv, idx) for mv, idx in zip(legal, legal_indices) if idx is not None]
+            if not legal_pairs:
+                break
+            probs = pi[[idx for _, idx in legal_pairs]]
+            if probs.sum() <= 0:
+                probs = torch.ones(len(legal_pairs), dtype=torch.float32) / len(legal_pairs)
             else:
-                legal_probs = legal_probs / legal_probs.sum()
-            idx = torch.multinomial(legal_probs, 1).item()
-            b.push(legal[idx])
+                probs = probs / probs.sum()
+            choice = torch.multinomial(probs, 1).item()
+            b.push(legal_pairs[choice][0])
             history_states.append(b.copy(stack=False))
         res = b.result()
         z = 0.0 if res == "1/2-1/2" else (1.0 if res == "1-0" else -1.0)
@@ -238,7 +258,7 @@ def self_play(net: PolicyValueNet, mcts: MCTS, device: torch.device, games: int)
     return samples
 
 
-def train_step(net: PolicyValueNet, optimizer, batch, device: torch.device, c2: float = 1.0):
+def train_step(net: AlphaZeroNet, optimizer, batch, device: torch.device, c2: float = 1.0):
     states, targets_p, targets_v = batch
     states = states.to(device)
     targets_p = targets_p.to(device)
@@ -246,9 +266,7 @@ def train_step(net: PolicyValueNet, optimizer, batch, device: torch.device, c2: 
     optimizer.zero_grad()
     logits, values = net(states)
     logp = torch.log_softmax(logits, dim=1)
-    # Only optimize over moves that have nonzero target probability (i.e., legal/visited).
     mask = (targets_p > 0).float()
-    # Avoid division by zero if a row has all zeros (fallback to averaging over all moves).
     normalizer = mask.sum(dim=1, keepdim=True).clamp(min=1.0)
     loss_p = -((targets_p * logp * mask).sum(dim=1) / normalizer.squeeze()).mean()
     loss_v = nn.MSELoss()(values.squeeze(), targets_v)
@@ -259,10 +277,11 @@ def train_step(net: PolicyValueNet, optimizer, batch, device: torch.device, c2: 
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Self-play RL with MCTS.")
+    parser = argparse.ArgumentParser(description="Self-play RL with batched MCTS.")
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--games-per-epoch", type=int, default=10)
-    parser.add_argument("--mcts-sims", type=int, default=64)
+    parser.add_argument("--mcts-sims", type=int, default=128)
+    parser.add_argument("--mcts-batch", type=int, default=64)
     parser.add_argument("--channels", type=int, default=128)
     parser.add_argument("--blocks", type=int, default=10)
     parser.add_argument("--lr", type=float, default=1e-3)
@@ -270,12 +289,29 @@ def main():
     parser.add_argument("--buffer-cap", type=int, default=50000)
     parser.add_argument("--save-every", type=int, default=5)
     parser.add_argument("--save-dir", type=Path, default=Path("checkpoints"))
+    parser.add_argument("--move-list", type=Path, default=Path("data/processed/supervised/label_encoder_classes.npy"))
+    parser.add_argument("--init-ckpt", type=Path, default=None, help="Optional supervised checkpoint to warm start",)
     args = parser.parse_args()
 
+    idx_to_move, move_to_idx = load_move_encoder(args.move_list)
+    action_size = len(idx_to_move)
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net = PolicyValueNet(channels=args.channels, blocks=args.blocks, n_classes=4096, input_channels=103).to(device)
+    net = AlphaZeroNet(channels=args.channels, blocks=args.blocks, n_classes=action_size, input_channels=119)
+    if args.init_ckpt and args.init_ckpt.exists():
+        state = torch.load(args.init_ckpt, map_location="cpu")
+        net.load_state_dict(state.get("model_state", state), strict=False)
+    net = net.to(device)
+
     optimizer = optim.Adam(net.parameters(), lr=args.lr)
-    mcts = MCTS(net, device=device, sims=args.mcts_sims)
+    mcts = MCTS(
+        net,
+        device=device,
+        sims=args.mcts_sims,
+        move_to_idx=move_to_idx,
+        idx_to_move=idx_to_move,
+        batch_size=args.mcts_batch,
+    )
     buffer = ReplayBuffer(capacity=args.buffer_cap)
 
     for epoch in range(1, args.epochs + 1):
@@ -289,7 +325,13 @@ def main():
         if epoch % args.save_every == 0:
             args.save_dir.mkdir(parents=True, exist_ok=True)
             torch.save(
-                {"model_state": net.state_dict(), "arch": "pv_conv", "channels": args.channels},
+                {
+                    "model_state": net.state_dict(),
+                    "arch": "alphazero_resnet",
+                    "channels": args.channels,
+                    "blocks": args.blocks,
+                    "moves": idx_to_move,
+                },
                 args.save_dir / f"rl_pv_epoch_{epoch}.pt",
             )
 
