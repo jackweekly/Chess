@@ -72,7 +72,7 @@ train-rl:
 	@echo "Starting AlphaZero Loop (MCTS Sims: $(MCTS_SIMS))..."
 	@mkdir -p $(RL_CKPT_DIR)
 	@if [ $(GPUS) -gt 1 ]; then \
-		torchrun --nproc_per_node=$(GPUS) src/rl/self_play_mcts.py \
+		PYTHONPATH=. torchrun --nproc_per_node=$(GPUS) -m src.rl.self_play_mcts \
 			--channels $(MODEL_CHANNELS) \
 			--blocks $(MODEL_BLOCKS) \
 			--mcts-sims $(MCTS_SIMS) \
@@ -81,7 +81,7 @@ train-rl:
 			--save-dir $(RL_CKPT_DIR) \
 			--load-checkpoint $(SUPERVISED_CKPT); \
 	else \
-		$(PYTHON) src/rl/self_play_mcts.py \
+		PYTHONPATH=. $(PYTHON) -m src.rl.self_play_mcts \
 			--channels $(MODEL_CHANNELS) \
 			--blocks $(MODEL_BLOCKS) \
 			--mcts-sims $(MCTS_SIMS) \
