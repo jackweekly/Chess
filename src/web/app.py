@@ -241,7 +241,7 @@ async def api_load_model(payload: dict):
         move_to_idx = {uci: i for i, uci in enumerate(idx_to_move)}
     else:
         if not moves_path.exists():
-            raise HTTPException(400, "Move list not found and checkpoint missing embedded moves")
+            raise HTTPException(400, f"Move list not found at {moves_path} and checkpoint missing embedded moves")
         idx_to_move, move_to_idx = load_move_encoder(moves_path)
     action_size = len(idx_to_move)
     model = AlphaZeroNet(
