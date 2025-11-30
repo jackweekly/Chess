@@ -104,7 +104,9 @@ clean:
 
 stop:
 	@echo "Stopping all training processes..."
-	@pkill -f "self_play_mcts.py" || true
+	@pkill -f "src/rl/self_play_mcts.py" || true
+	@pkill -f "src.rl.self_play_mcts" || true
+	@pkill -f "torchrun.*self_play_mcts" || true
 	@pkill -f "supervised_baseline.py" || true
 	@pkill -f "uvicorn" || true
 	@pkill -f "tensorboard" || true
@@ -115,7 +117,9 @@ stop-tensorboard:
 
 stop-train-rl:
 	@echo "Stopping train-rl (self_play_mcts.py)..."
-	@pkill -f "self_play_mcts.py" || true
+	@pkill -f "src/rl/self_play_mcts.py" || true
+	@pkill -f "src.rl.self_play_mcts" || true
+	@pkill -f "torchrun.*self_play_mcts" || true
 
 download-pieces:
 	@echo "Downloading chess piece SVGs ($(PIECE_SET))..."
