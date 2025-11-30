@@ -46,6 +46,7 @@ current_match: Dict[str, object] = {
     "result": None,
     "model_as_white": True,
 }
+match_task: Optional[asyncio.Task] = None
 
 
 def maybe_load_engine() -> Optional[chess.engine.SimpleEngine]:
@@ -203,15 +204,27 @@ async def api_eval_history():
 
 @app.post("/api/start_match")
 async def api_start_match(payload: dict):
+    global match_task, board
+    # Reset board and start a background match loop (model vs stockfish/random)
+    delay = float(payload.get("delay", 1.0))
+    model_as_white = bool(payload.get("model_as_white", True))
+    board = chess.Board()
     current_match["running"] = True
     current_match["result"] = None
-    current_match["model_as_white"] = True
+    current_match["model_as_white"] = model_as_white
+    # cancel existing task
+    if match_task and not match_task.done():
+        match_task.cancel()
+    match_task = asyncio.create_task(run_match_loop(delay))
     return {"status": "started"}
 
 
 @app.post("/api/stop_match")
 async def api_stop_match():
+    global match_task
     current_match["running"] = False
+    if match_task and not match_task.done():
+        match_task.cancel()
     return {"status": "stopped"}
 
 
@@ -224,6 +237,39 @@ async def api_match_state():
         "result": current_match["result"],
         "model_as_white": current_match["model_as_white"],
     }
+
+
+async def run_match_loop(delay: float):
+    """Simple match runner: model vs stockfish (if available) or random."""
+    while current_match["running"]:
+        if board.is_game_over():
+            current_match["running"] = False
+            current_match["result"] = board.result()
+            break
+        # Decide whose turn
+        model_turn = (board.turn == chess.WHITE and current_match["model_as_white"]) or (
+            board.turn == chess.BLACK and not current_match["model_as_white"]
+        )
+        move = None
+        if model_turn and mcts_instance is not None:
+            try:
+                move = mcts_instance.get_best_move(board, sims=50)
+            except Exception:
+                move = None
+        elif not model_turn and engine is not None:
+            try:
+                info = await engine.play(board, limit=chess.engine.Limit(time=0.05))
+                if info.move:
+                    move = info.move.uci()
+            except Exception:
+                move = None
+        if move is None:
+            legal = list(board.legal_moves)
+            if legal:
+                move = random.choice(legal).uci()
+        if move:
+            board.push_uci(move)
+        await asyncio.sleep(delay)
 
 
 @app.post("/api/load_model")
