@@ -1,4 +1,4 @@
-.PHONY: install download prep train-supervised train-rl play clean stop stop-tensorboard
+.PHONY: install download prep train-supervised train-rl play clean stop stop-tensorboard stop-train-rl
 
 PYTHON ?= python3
 # --- Hardware & Compute ---
@@ -112,6 +112,10 @@ stop:
 stop-tensorboard:
 	@echo "Stopping tensorboard..."
 	@pkill -f "tensorboard" || true
+
+stop-train-rl:
+	@echo "Stopping train-rl (self_play_mcts.py)..."
+	@pkill -f "self_play_mcts.py" || true
 
 download-pieces:
 	@echo "Downloading chess piece SVGs ($(PIECE_SET))..."
