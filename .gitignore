@@ -1,0 +1,21 @@
+# OS junk
+.DS_Store
+
+# Virtual environments and tooling artifacts
+.venv/
+.venv-backups/
+env/
+venv/
+.vscode/
+.stfolder
+.stignore
+__pycache__/
+*.pyc
+
+# Data and generated assets
+data/
+logs/
+
+# Credentials and cache
+kaggle.json
+.hf_home/

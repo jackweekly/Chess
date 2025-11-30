@@ -1,0 +1,710 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Chess Assistant</title>
+  <link rel="icon"
+    href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>♞</text></svg>">
+  <link rel="stylesheet"
+    href="https://cdn.jsdelivr.net/npm/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css" />
+  <style>
+    :root {
+      --bg: #0b1220;
+      --card: #111a2c;
+      --accent: #38bdf8;
+      --accent-2: #22d3ee;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --mono-bg: #0b1220;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', 'Segoe UI', Arial, sans-serif;
+      margin: 0;
+      padding: 1rem;
+      background: radial-gradient(circle at 10% 20%, #112240, #0b1220 40%), var(--bg);
+      color: var(--text);
+    }
+
+    .container {
+      max-width: 1200px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 0 0 1rem 0;
+      letter-spacing: 0.5px;
+    }
+
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      align-items: start;
+    }
+
+    .card {
+      background: var(--card);
+      padding: 1rem;
+      border-radius: 12px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+    }
+
+    input,
+    button {
+      padding: 0.65rem;
+      border-radius: 6px;
+      border: 1px solid #1f2937;
+    }
+
+    input {
+      background: #0f172a;
+      color: var(--text);
+      width: 100%;
+    }
+
+    button {
+      background: var(--accent);
+      color: #0b1220;
+      font-weight: 700;
+      cursor: pointer;
+    }
+
+    button:hover {
+      background: var(--accent-2);
+    }
+
+    .row {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .label {
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    .suggest {
+      font-size: 1.1rem;
+      font-weight: 700;
+      color: #a5f3fc;
+    }
+
+    .moves {
+      font-family: monospace;
+      background: #0f172a;
+      padding: 0.5rem;
+      border-radius: 8px;
+      max-height: 200px;
+      overflow: auto;
+    }
+
+    .move-table {
+      width: 100%;
+      border-collapse: collapse;
+      color: var(--text);
+    }
+
+    .move-table td {
+      padding: 4px 6px;
+      font-family: monospace;
+    }
+
+    .status {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .pill {
+      background: #0f172a;
+      padding: 0.35rem 0.6rem;
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 0.9rem;
+    }
+
+    .error {
+      color: #fca5a5;
+      margin-top: 0.5rem;
+    }
+
+    .board-wrap {
+      display: flex;
+      gap: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .highlight {
+      box-shadow: inset 0 0 0 3px #38bdf8 !important;
+    }
+
+    .suggest {
+      box-shadow: inset 0 0 0 3px #f59e0b !important;
+    }
+
+    .possible {
+      box-shadow: inset 0 0 0 3px rgba(34, 197, 94, 0.9) !important;
+    }
+
+    .spinner {
+      width: 16px;
+      height: 16px;
+      border: 2px solid #38bdf8;
+      border-top-color: transparent;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      display: inline-block;
+      vertical-align: middle;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    .promo-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 999;
+    }
+
+    .promo-card {
+      background: var(--card);
+      padding: 1rem;
+      border-radius: 10px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+      display: flex;
+      gap: 0.5rem;
+    }
+
+    .promo-btn {
+      width: 60px;
+      height: 60px;
+      border: 1px solid #1f2937;
+      border-radius: 8px;
+      background: #0f172a;
+      cursor: pointer;
+    }
+
+    .promo-btn:hover {
+      border-color: var(--accent);
+    }
+
+    .controls {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+
+    .row-compact {
+      display: flex;
+      gap: 0.5rem;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+
+    .chart-card {
+      background: var(--card);
+      padding: 1rem;
+      border-radius: 12px;
+      box-shadow: 0 12px 30px rgba(0, 0, 0, 0.25);
+      margin-top: 1rem;
+    }
+  </style>
+</head>
+
+<body>
+  <div class="container">
+    <h1>Chess Assistant</h1>
+    <div class="grid" style="grid-template-columns: 1.5fr 1fr;">
+      <div class="card">
+        <div class="board-wrap">
+          <div id="primaryBoard" style="width: 480px;"></div>
+          <div style="flex:1; min-width: 220px;">
+            <div class="status">
+              <div class="pill">Side to move: <span id="turn">?</span></div>
+              <div class="pill">Game over: <span id="status">no</span></div>
+              <div class="pill">Engine: <span id="engine">none</span></div>
+              <div class="pill">Depth: <span id="depth">-</span></div>
+              <div class="pill">NPS: <span id="nps">-</span></div>
+              <div class="pill">Check: <span id="check">no</span></div>
+            </div>
+            <div class="row" style="margin-top:0.75rem;">
+              <div class="label">Suggestion:</div>
+              <div id="suggestion" class="suggest">-</div><span id="thinking" style="margin-left:6px;"></span>
+            </div>
+            <div class="label" style="margin-top:0.5rem;">Principal variation:</div>
+            <div id="pv" class="moves"></div>
+            <div class="label" style="margin-top:0.5rem;">FEN:</div>
+            <div id="fen" class="moves" style="max-height: 100px;"></div>
+          </div>
+        </div>
+        <div class="label">Match moves:</div>
+        <div id="matchMoves" class="moves"></div>
+      </div>
+      <div class="card">
+        <div class="label">Model checkpoint path:</div>
+        <input id="modelPath" value="checkpoints/supervised_policy.pt" />
+        <div class="row" style="margin-top:0.5rem;">
+          <button onclick="loadModel()">Load Model</button>
+          <button onclick="startMatch()">Start Match</button>
+          <button onclick="stopMatch()">Stop Match</button>
+          <button onclick="swapSides()">Swap Sides</button>
+        </div>
+        <div class="label" style="margin-top:0.5rem;">Match status:</div>
+        <div id="matchStatus" class="moves" style="min-height:48px;"></div>
+        <div id="error" class="error"></div>
+        <div class="chart-card">
+          <div class="row-compact">
+            <div class="label">Record vs Stockfish</div>
+            <button onclick="runEval()">Run eval</button>
+            <input id="evalGames" type="number" value="4" min="1" style="width:70px;" />
+            <button onclick="loadHistory()">Refresh history</button>
+          </div>
+          <div class="moves" id="recordTotals"></div>
+          <div class="moves" id="recordHistory" style="max-height:140px;"></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card">
+      <div class="label">Move list (SAN):</div>
+      <table class="move-table" id="moveTable"></table>
+    </div>
+
+    <div class="chart-card">
+      <div class="row-compact">
+        <div class="label">Evaluation vs Stockfish</div>
+        <button onclick="runEval()">Run eval</button>
+        <input id="evalGames" type="number" value="4" min="1" style="width:70px;" />
+        <button onclick="loadHistory()">Refresh history</button>
+      </div>
+      <canvas id="evalChart" height="120"></canvas>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/jquery@3.6.4/dist/jquery.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chess.js@0.12.0/chess.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+  <script>
+    let boardUI = null;
+    let orientation = 'white';
+    let lastState = null;
+    let chessjs = null;
+    let pendingPromotion = null;
+    let autoTimer = null;
+
+    function setError(msg) {
+      document.getElementById('error').textContent = msg || '';
+    }
+
+    async function fetchState() {
+      const res = await fetch('/api/state');
+      if (!res.ok) return;
+      const data = await res.json();
+      renderState(data);
+    }
+
+    function clearHighlights() {
+      document.querySelectorAll('.square-55d63').forEach(el => {
+        el.classList.remove('highlight', 'suggest', 'possible');
+      });
+    }
+
+    function renderBoard(fen, highlightMove, suggestMove) {
+      boardUI.position(fen, false);
+      clearHighlights();
+      const toSq = (mv) => [mv.slice(0, 2), mv.slice(2, 4)];
+      if (highlightMove && highlightMove.length === 4) {
+        toSq(highlightMove).forEach(sq => {
+          const el = document.querySelector(`.square-${sq}`);
+          if (el) el.classList.add('highlight');
+        });
+      }
+      if (suggestMove && suggestMove.length === 4) {
+        toSq(suggestMove).forEach(sq => {
+          const el = document.querySelector(`.square-${sq}`);
+          if (el) el.classList.add('suggest');
+        });
+      }
+    }
+
+    function renderMoveTable(sanMoves) {
+      const table = document.getElementById('moveTable');
+      table.innerHTML = '';
+      for (let i = 0; i < sanMoves.length; i += 2) {
+        const tr = document.createElement('tr');
+        const num = document.createElement('td');
+        num.textContent = `${(i / 2) + 1}.`;
+        const white = document.createElement('td');
+        white.textContent = sanMoves[i] || '';
+        const black = document.createElement('td');
+        black.textContent = sanMoves[i + 1] || '';
+        tr.dataset.ply = i + 2;
+        tr.style.cursor = 'pointer';
+        tr.onclick = () => jumpToPly(i + 2);
+        tr.appendChild(num); tr.appendChild(white); tr.appendChild(black);
+        table.appendChild(tr);
+      }
+    }
+
+    async function jumpToPly(ply) {
+      setError('');
+      const res = await fetch('/api/goto', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ply }) });
+      const data = await res.json();
+      if (!res.ok) { setError(data.detail || 'Error'); return; }
+      renderState(data);
+    }
+
+    function renderState(data) {
+      lastState = data;
+      chessjs.load(data.fen);
+      document.getElementById('turn').textContent = data.turn;
+      document.getElementById('status').textContent = data.is_game_over ? `yes (${data.result})` : 'no';
+      document.getElementById('fen').textContent = data.fen;
+      document.getElementById('engine').textContent = data.engine?.available ? data.engine.name : 'none';
+      const sugg = data.suggestion && data.suggestion.move ? `${data.suggestion.move} (cp ${data.suggestion.score ?? 'n/a'})` : '-';
+      document.getElementById('suggestion').textContent = sugg;
+      document.getElementById('depth').textContent = data.suggestion?.info?.depth ?? '-';
+      document.getElementById('nps').textContent = data.suggestion?.info?.nps ? data.suggestion.info.nps.toLocaleString() : '-';
+      document.getElementById('thinking').innerHTML = data.suggestion?.move ? '' : '<span class="spinner"></span>';
+      document.getElementById('pv').textContent = data.suggestion?.pv?.join(' ') || '-';
+      document.getElementById('check').textContent = chessjs.in_check() ? 'yes' : 'no';
+
+      // Auto-flip board: Model plays Bottom.
+      // If model_as_white is True, Model plays White -> Orientation White.
+      // If model_as_white is False, Model plays Black -> Orientation Black.
+      // BUT user wants Model to be on BOTTOM? No, usually User is on bottom.
+      // "Stockfish model should always be playing on top."
+      // So if Model is White, it is on Top? No, White is usually Bottom.
+      // Let's assume "Model on Top" means Model is playing the side that is at the top of the screen.
+      // Standard: White is Bottom.
+      // If Model is White, and Model is Top -> Orientation Black.
+      // If Model is Black, and Model is Top -> Orientation White.
+      // User said: "it is still playing white which is now on top. It should ALWAYS be playing for the bottom side (white or black) and the stockfish model should always be playing on top."
+      // Wait, "It should ALWAYS be playing for the bottom side". "It" refers to the Model?
+      // "stockfish model should always be playing on top".
+      // Okay, so Model (our RL agent) = Bottom. Stockfish (opponent) = Top.
+      // If Model is White -> Orientation White (White at Bottom).
+      // If Model is Black -> Orientation Black (Black at Bottom).
+
+      const desiredOrientation = data.model_as_white ? 'white' : 'black';
+      if (orientation !== desiredOrientation) {
+        orientation = desiredOrientation;
+        boardUI.orientation(orientation);
+      }
+
+      renderBoard(data.fen, data.move_stack.slice(-1)[0], data.suggestion?.move);
+      renderMoveTable(data.san_stack || []);
+    }
+
+    async function sendMove() {
+      setError('');
+      const moveText = document.getElementById('moveInput').value.trim();
+      if (!moveText) return;
+      let uci = moveText;
+      // Try SAN parsing
+      if (chessjs) {
+        const allMoves = chessjs.moves({ verbose: true });
+        const sanMatch = allMoves.find(m => m.san === moveText);
+        if (sanMatch) {
+          uci = sanMatch.from + sanMatch.to + (sanMatch.promotion || '');
+        }
+      }
+      const res = await fetch('/api/move', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ move: uci }) });
+      const data = await res.json();
+      if (!res.ok) { setError(data.detail || 'Error'); return; }
+      renderState(data);
+      document.getElementById('moveInput').value = '';
+    }
+
+    async function undo() {
+      setError('');
+      const res = await fetch('/api/undo', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) { setError(data.detail || 'Error'); return; }
+      renderState(data);
+    }
+
+    async function reset() {
+      setError('');
+      const res = await fetch('/api/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+      const data = await res.json();
+      if (!res.ok) { setError(data.detail || 'Error'); return; }
+      renderState(data);
+    }
+
+    async function loadFen() {
+      setError('');
+      const fen = document.getElementById('fenInput').value.trim();
+      if (!fen) return;
+      const res = await fetch('/api/reset', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ fen }) });
+      const data = await res.json();
+      if (!res.ok) { setError(data.detail || 'Error'); return; }
+      renderState(data);
+    }
+
+    function flipBoard() {
+      orientation = orientation === 'white' ? 'black' : 'white';
+      boardUI.orientation(orientation);
+      if (lastState) renderBoard(lastState.fen);
+    }
+
+    async function setEngine() {
+      setError('');
+      const mode = 'stockfish';
+      const depth = 12;
+      const time = null;
+      const res = await fetch('/api/engine', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ mode, depth, time }) });
+      const data = await res.json();
+      if (!res.ok) { setError(data.detail || 'Error'); return; }
+      renderState(data);
+    }
+
+    async function swapSides() {
+      if (!lastState) return;
+      const newSide = !lastState.model_as_white;
+      const res = await fetch('/api/set_side', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model_as_white: newSide }) });
+      const data = await res.json();
+      if (!res.ok) { setError(data.detail || 'Error'); return; }
+      renderState(data);
+    }
+
+    async function refreshSuggestion() {
+      await fetchState();
+    }
+
+    function toggleAuto() {
+      const checked = document.getElementById('autoRefresh').checked;
+      if (autoTimer) {
+        clearInterval(autoTimer);
+        autoTimer = null;
+      }
+      if (checked) {
+        autoTimer = setInterval(fetchState, 4000);
+      }
+    }
+
+    function prevPly() { jumpToPly(Math.max((lastState?.move_stack?.length || 0) - 1, 0)); }
+    function nextPly() { jumpToPly(Math.min((lastState?.move_stack?.length || 0) + 1, (lastState?.san_stack?.length || 0))); }
+
+    async function importPgn() {
+      setError('');
+      const pgn = document.getElementById('pgnInput').value.trim();
+      if (!pgn) return;
+      const res = await fetch('/api/import_pgn', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pgn }) });
+      const data = await res.json();
+      if (!res.ok) { setError(data.detail || 'Error'); return; }
+      renderState(data);
+    }
+
+    async function exportPgn() {
+      const res = await fetch('/api/export_pgn');
+      const data = await res.json();
+      if (data.pgn) {
+        navigator.clipboard.writeText(data.pgn).catch(() => { });
+        alert('PGN copied to clipboard');
+      }
+    }
+
+    async function loadModel() {
+      setError('');
+      const path = document.getElementById('modelPath').value.trim() || 'checkpoints/supervised_policy.pt';
+      const res = await fetch('/api/load_model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) });
+      if (!res.ok) {
+        let msg = 'Load model failed';
+        try { const data = await res.json(); msg = data.detail || msg; } catch (_) { msg = await res.text(); }
+        setError(msg);
+        return;
+      }
+    }
+
+    async function runEval() {
+      const games = parseInt(document.getElementById('evalGames').value || '4', 10);
+      const res = await fetch('/api/eval', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ games }) });
+      if (res.ok) {
+        await loadHistory();
+      } else {
+        const data = await res.json();
+        setError(data.detail || 'Eval failed');
+      }
+    }
+
+    async function loadHistory() {
+      const res = await fetch('/api/eval_history');
+      const data = await res.json();
+      const totals = data.totals || { win: 0, draw: 0, loss: 0 };
+      document.getElementById('recordTotals').textContent = `W: ${totals.win}  D: ${totals.draw}  L: ${totals.loss}`;
+      const hist = data.history || [];
+      document.getElementById('recordHistory').textContent = hist.map((h, i) => `${i + 1}. ${h.ts || ''} ${h.result || ''}`).join('\n');
+    }
+
+    let matchPoll = null;
+    async function startMatch() {
+      setError('');
+      const res = await fetch('/api/start_match', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ delay: 1.0 }) });
+      if (!res.ok) {
+        let msg = 'Start match failed';
+        try { const data = await res.json(); msg = data.detail || msg; } catch (_) { msg = await res.text(); }
+        setError(msg);
+        document.getElementById('matchStatus').textContent = msg;
+        return;
+      }
+      document.getElementById('matchStatus').textContent = 'Running...';
+      if (matchPoll) clearInterval(matchPoll);
+      matchPoll = setInterval(loadMatchState, 400);
+    }
+
+    async function stopMatch() {
+      if (matchPoll) {
+        clearInterval(matchPoll);
+        matchPoll = null;
+      }
+      await fetch('/api/stop_match', { method: 'POST' });
+      document.getElementById('matchStatus').textContent = 'Stopped';
+      // reset board orientation to white
+      boardUI.orientation('white');
+    }
+
+    async function loadMatchState() {
+      const res = await fetch('/api/match_state');
+      if (!res.ok) return;
+      const data = await res.json();
+      if (!data.fen) return;
+      if (data.model_as_white === false) {
+        boardUI.orientation('black');
+      } else {
+        boardUI.orientation('white');
+      }
+      boardUI.position(data.fen, true);
+      document.getElementById('matchMoves').textContent = (data.move_stack || []).join(' ');
+      if (!data.running && matchPoll) {
+        clearInterval(matchPoll);
+        matchPoll = null;
+        document.getElementById('matchStatus').textContent = `Finished: ${data.result || ''}`;
+        boardUI.orientation('white');
+      }
+    }
+
+    function onDragStart(source, piece) {
+      if (!lastState || lastState.is_game_over) return false;
+      if (!chessjs) return false;
+      // enforce side to move
+      if ((chessjs.turn() === 'w' && piece.startsWith('b')) || (chessjs.turn() === 'b' && piece.startsWith('w'))) {
+        return false;
+      }
+      const moves = chessjs.moves({ square: source, verbose: true });
+      clearHighlights();
+      moves.forEach(mv => {
+        const el = document.querySelector(`.square-${mv.to}`);
+        if (el) el.classList.add('possible');
+      });
+      return true;
+    }
+
+    function needsPromotion(moveObj) {
+      return moveObj && moveObj.flags && moveObj.flags.includes('p') && moveObj.promotion;
+    }
+
+    function openPromotion(from, to, color) {
+      pendingPromotion = { from, to, color };
+      const overlay = document.getElementById('promo');
+      overlay.style.display = 'flex';
+    }
+
+    async function sendPromotedMove(promo) {
+      if (!pendingPromotion) return;
+      const { from, to } = pendingPromotion;
+      pendingPromotion = null;
+      document.getElementById('promo').style.display = 'none';
+      const res = await fetch('/api/move', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ move: from + to + promo }) });
+      const data = await res.json();
+      if (!res.ok) { setError(data.detail || 'Error'); return; }
+      renderState(data);
+    }
+
+    async function onDrop(source, target) {
+      clearHighlights();
+      if (source === target) return 'snapback';
+      if (!chessjs) return 'snapback';
+      const moves = chessjs.moves({ square: source, verbose: true });
+      const candidate = moves.find(m => m.to === target);
+      if (!candidate) return 'snapback';
+      if (needsPromotion(candidate)) {
+        openPromotion(source, target, candidate.color);
+        return 'snapback';
+      }
+      // Send to backend
+      const res = await fetch('/api/move', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ move: source + target }) });
+      const data = await res.json();
+      if (!res.ok) { setError(data.detail || 'Error'); return 'snapback'; }
+      renderState(data);
+      return 'drop';
+    }
+
+    function onSnapEnd() {
+      if (lastState) renderBoard(lastState.fen, lastState.move_stack?.slice(-1)[0], lastState.suggestion?.move);
+    }
+
+    function initBoard() {
+      boardUI = Chessboard('primaryBoard', {
+        position: 'start',
+        orientation,
+        pieceTheme: '/static/pieces/{piece}.svg',
+        draggable: true,
+        onDragStart: onDragStart,
+        onDrop: onDrop,
+        onSnapEnd: onSnapEnd,
+        moveSpeed: 'slow',
+        snapbackSpeed: 600,
+        snapSpeed: 400,
+      });
+    }
+
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendMove();
+      if (e.key === 'u') undo();
+      if (e.key === 'f') flipBoard();
+      if (e.key === 'r') fetchState();
+    });
+
+    function startApp() {
+      chessjs = new Chess();
+      initBoard();
+      fetchState();
+      loadHistory();
+      setInterval(loadHistory, 5000);
+    }
+
+    startApp();
+  </script>
+  <div id="promo" class="promo-overlay">
+    <div class="promo-card">
+      <button class="promo-btn" onclick="sendPromotedMove('q')"><img src="/static/pieces/wQ.svg" width="48"
+          height="48" /></button>
+      <button class="promo-btn" onclick="sendPromotedMove('r')"><img src="/static/pieces/wR.svg" width="48"
+          height="48" /></button>
+      <button class="promo-btn" onclick="sendPromotedMove('b')"><img src="/static/pieces/wB.svg" width="48"
+          height="48" /></button>
+      <button class="promo-btn" onclick="sendPromotedMove('n')"><img src="/static/pieces/wN.svg" width="48"
+          height="48" /></button>
+    </div>
+  </div>
+</body>
+
+</html>
