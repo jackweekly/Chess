@@ -10,6 +10,7 @@ app = FastAPI(title="AlphaZero Dashboard")
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 EVAL_HISTORY_PATH = Path("data/eval/history.json")
+match_state = {"running": False, "result": None}
 
 
 @app.get("/health.ico", include_in_schema=False)
@@ -45,6 +46,24 @@ async def get_metrics():
         except Exception as e:
             print(f"Error reading metrics: {e}")
     return data
+
+
+@app.post("/api/start_match")
+async def start_match():
+    match_state["running"] = True
+    match_state["result"] = None
+    return {"status": "started"}
+
+
+@app.post("/api/stop_match")
+async def stop_match():
+    match_state["running"] = False
+    return {"status": "stopped"}
+
+
+@app.get("/api/match_state")
+async def match_state_api():
+    return match_state
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")

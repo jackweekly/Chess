@@ -7,7 +7,7 @@
     <style>
         body { background: #0d1117; color: #c9d1d9; font-family: sans-serif; margin: 0; padding: 20px; }
         .grid { display: grid; grid-template-columns: 3fr 1fr; gap: 20px; max-width: 1400px; margin: 0 auto; }
-        .card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 20px; }
+        .card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 20px; margin-bottom: 20px;}
         h2 { margin-top: 0; color: #58a6ff; font-size: 16px; text-transform: uppercase; letter-spacing: 1px; }
         .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; }
         .stat-box { background: #0d1117; padding: 15px; text-align: center; border-radius: 4px; border: 1px solid #30363d; }
@@ -15,6 +15,11 @@
         .stat-label { font-size: 12px; color: #8b949e; }
         .stat-num.green { color: #3fb950; }
         canvas { width: 100% !important; height: 350px !important; }
+        .btn { width: 100%; padding: 12px; margin-bottom: 10px; border: none; border-radius: 6px; cursor: pointer; font-weight: bold; }
+        .btn-start { background: #238636; color: white; }
+        .btn-start:hover { background: #2ea043; }
+        .btn-stop { background: #da3633; color: white; }
+        .btn-stop:hover { background: #f85149; }
     </style>
 </head>
 <body>
@@ -24,7 +29,7 @@
             <div class="stats">
                 <div class="stat-box">
                     <div class="stat-num green" id="curr-win-rate">0%</div>
-                    <div class="stat-label">Current Win Rate vs Stockfish</div>
+                    <div class="stat-label">Win Rate vs Stockfish</div>
                 </div>
                 <div class="stat-box">
                     <div class="stat-num" id="total-games">0</div>
@@ -44,15 +49,15 @@
 
         <div class="side-col">
             <div class="card">
+                <h2>Controls</h2>
+                <button class="btn btn-start" onclick="startMatch()">▶ Start Evaluation</button>
+                <button class="btn btn-stop" onclick="stopMatch()">⏹ Stop Match</button>
+            </div>
+
+            <div class="card">
                 <h2>System Status</h2>
-                <p><strong>Mode:</strong> <span style="color: #d29922;">Self-Play Training</span></p>
-                <p><strong>Device:</strong> CUDA (GPU)</p>
-                <p><strong>Batch Size:</strong> 256</p>
-                <p><strong>MCTS Sims:</strong> 800</p>
-                <hr style="border-color: #30363d;">
                 <div id="log-window" style="font-family: monospace; font-size: 11px; color: #8b949e; height: 200px; overflow-y: auto;">
                     [System] Dashboard connected...<br>
-                    [System] Waiting for metrics...
                 </div>
             </div>
         </div>
@@ -62,51 +67,42 @@
         const ctx = document.getElementById('trainingChart').getContext('2d');
         const chart = new Chart(ctx, {
             type: 'line',
-            data: {
-                labels: [],
-                datasets: [{
-                    label: 'Win Rate',
-                    data: [],
-                    borderColor: '#3fb950',
-                    backgroundColor: 'rgba(63, 185, 80, 0.1)',
-                    borderWidth: 2,
-                    fill: true,
-                    tension: 0.3
-                }]
-            },
-            options: {
-                responsive: true,
-                plugins: { legend: { display: false } },
-                scales: {
-                    y: { beginAtZero: true, max: 1.0, grid: { color: '#30363d' } },
-                    x: { grid: { display: false } }
-                }
-            }
+            data: { labels: [], datasets: [{ label: 'Win Rate', data: [], borderColor: '#3fb950', fill: true, tension: 0.3 }] },
+            options: { responsive: true, scales: { y: { beginAtZero: true, max: 1.0, grid: { color: '#30363d' } }, x: { grid: { display: false } } } }
         });
 
         async function fetchMetrics() {
             try {
                 const res = await fetch('/api/metrics');
                 const data = await res.json();
-
                 if (data.labels && data.labels.length > 0) {
                     chart.data.labels = data.labels;
                     chart.data.datasets[0].data = data.win_rates;
                     chart.update();
-
                     const lastRate = data.win_rates[data.win_rates.length - 1];
                     document.getElementById('curr-win-rate').innerText = (lastRate * 100).toFixed(1) + '%';
-                    document.getElementById('total-games').innerText = data.labels.length * 10; // placeholder scaling
+                    document.getElementById('total-games').innerText = data.labels.length * 10;
                     const lastLoss = data.loss.length ? data.loss[data.loss.length - 1] : 0;
                     document.getElementById('curr-loss').innerText = Number(lastLoss).toFixed(3);
-
                     const log = document.getElementById('log-window');
-                    log.innerHTML += `<div>Updated: ${new Date().toLocaleTimeString()} (WR: ${(lastRate*100).toFixed(0)}%)</div>`;
+                    log.innerHTML += `<div>[${new Date().toLocaleTimeString()}] WR: ${(lastRate*100).toFixed(0)}%</div>`;
                     log.scrollTop = log.scrollHeight;
                 }
-            } catch (err) {
-                console.error("Fetch error", err);
-            }
+            } catch (err) {}
+        }
+
+        async function startMatch() {
+            document.getElementById('log-window').innerHTML += `<div>> Starting Match...</div>`;
+            await fetch('/api/start_match', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({opponent: 'stockfish', max_plies: 200})
+            });
+        }
+
+        async function stopMatch() {
+            document.getElementById('log-window').innerHTML += `<div>> Stopping...</div>`;
+            await fetch('/api/stop_match', { method: 'POST' });
         }
 
         setInterval(fetchMetrics, 2000);

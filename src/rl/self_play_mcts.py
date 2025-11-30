@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
 from datetime import datetime
+from tqdm import tqdm
 
 import chess
 import numpy as np
@@ -160,10 +161,13 @@ class ReplayBuffer:
         return len(self.buf)
 
 
-def self_play(net: AlphaZeroNet, mcts: BatchedMCTS, games: int, temperature_moves: int = 30) -> List[Tuple[torch.Tensor, torch.Tensor, float]]:
+def self_play(net: AlphaZeroNet, mcts: BatchedMCTS, games: int, temperature_moves: int = 30, pbar: bool = False) -> List[Tuple[torch.Tensor, torch.Tensor, float]]:
     encoder = mcts.encoder
     samples = []
-    for _ in range(games):
+    game_iter = range(games)
+    if pbar:
+        game_iter = tqdm(game_iter, desc="Self-Play Games", unit="game")
+    for _ in game_iter:
         b = chess.Board()
         history = [b.copy(stack=False)]
         states = []
@@ -265,7 +269,8 @@ def main():
     buffer = ReplayBuffer(capacity=args.buffer_cap)
 
     for epoch in range(1, args.epochs + 1):
-        samples = self_play(net, mcts, games=args.games_per_epoch)
+        print(f"Epoch {epoch}: Generating games...")
+        samples = self_play(net, mcts, games=args.games_per_epoch, pbar=True)
         for s, p, v in samples:
             buffer.add((s, p, v))
         loss = 0.0
