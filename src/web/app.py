@@ -234,7 +234,8 @@ async def api_load_model(payload: dict):
         raise HTTPException(400, "Model not found")
 
     global policy_model, mcts_instance, idx_to_move, move_to_idx
-    ckpt = torch.load(path, map_location=policy_device)
+    # Trust local checkpoints; set weights_only=False for compatibility
+    ckpt = torch.load(path, map_location=policy_device, weights_only=False)
     if "moves" in ckpt:
         idx_to_move = [str(x) for x in ckpt["moves"]]
         move_to_idx = {uci: i for i, uci in enumerate(idx_to_move)}
