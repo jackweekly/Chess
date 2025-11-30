@@ -40,6 +40,12 @@ mcts_instance: Optional[MCTS] = None
 policy_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 idx_to_move: List[str] = []
 move_to_idx: Dict[str, int] = {}
+eval_history: List[Dict[str, str]] = []
+current_match: Dict[str, object] = {
+    "running": False,
+    "result": None,
+    "model_as_white": True,
+}
 
 
 def maybe_load_engine() -> Optional[chess.engine.SimpleEngine]:
@@ -158,6 +164,46 @@ async def api_reset(payload: dict):
     except Exception as e:
         raise HTTPException(400, f"Invalid FEN: {e}")
     return await get_state()
+
+# --- Evaluation / Match placeholders ---
+
+
+@app.post("/api/eval")
+async def api_eval(payload: dict):
+    games = payload.get("games", 0)
+    eval_history.append({"ts": datetime.utcnow().isoformat(), "result": f"queued {games} games"})
+    return {"status": "queued", "games": games}
+
+
+@app.get("/api/eval_history")
+async def api_eval_history():
+    totals = {"win": 0, "draw": 0, "loss": 0}
+    return {"history": eval_history, "totals": totals}
+
+
+@app.post("/api/start_match")
+async def api_start_match(payload: dict):
+    current_match["running"] = True
+    current_match["result"] = None
+    current_match["model_as_white"] = True
+    return {"status": "started"}
+
+
+@app.post("/api/stop_match")
+async def api_stop_match():
+    current_match["running"] = False
+    return {"status": "stopped"}
+
+
+@app.get("/api/match_state")
+async def api_match_state():
+    return {
+        "fen": board.fen(),
+        "move_stack": [m.uci() for m in board.move_stack],
+        "running": current_match["running"],
+        "result": current_match["result"],
+        "model_as_white": current_match["model_as_white"],
+    }
 
 
 @app.post("/api/load_model")
