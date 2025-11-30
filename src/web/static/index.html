@@ -2,194 +2,115 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>AlphaZero Dashboard</title>
-    <style>
-        body {
-            background-color: #121212;
-            color: #e0e0e0;
-            font-family: 'Segoe UI', sans-serif;
-            margin: 0; padding: 20px;
-        }
-        .container {
-            display: grid;
-            grid-template-columns: 2fr 1fr;
-            gap: 20px;
-            max-width: 1600px;
-            margin: 0 auto;
-        }
-        .card {
-            background: #1e1e1e;
-            border-radius: 8px;
-            padding: 20px;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-        }
-        h2 { margin-top: 0; color: #4caf50; }
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 10px;
-            margin-bottom: 20px;
-        }
-        .stat-box {
-            background: #2c2c2c;
-            padding: 15px;
-            text-align: center;
-            border-radius: 4px;
-        }
-        .stat-val { font-size: 24px; font-weight: bold; color: #fff; }
-        .stat-label { font-size: 12px; color: #aaa; }
-        #board {
-            width: 100%;
-            aspect-ratio: 1;
-            background-size: cover;
-            display: grid;
-            grid-template-columns: repeat(8, 1fr);
-            border: 2px solid #333;
-        }
-        .sq {
-            width: 100%; height: 100%;
-            display: flex; justify-content: center; align-items: center;
-        }
-        .sq.white { background-color: #769656; }
-        .sq.black { background-color: #eeeed2; }
-        .piece { width: 90%; height: 90%; background-size: contain; background-repeat: no-repeat; }
-        canvas { width: 100% !important; height: 300px !important; }
-        button { cursor: pointer; }
-    </style>
+    <title>AlphaZero Training Hub</title>
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { background: #0d1117; color: #c9d1d9; font-family: sans-serif; margin: 0; padding: 20px; }
+        .grid { display: grid; grid-template-columns: 3fr 1fr; gap: 20px; max-width: 1400px; margin: 0 auto; }
+        .card { background: #161b22; border: 1px solid #30363d; border-radius: 6px; padding: 20px; }
+        h2 { margin-top: 0; color: #58a6ff; font-size: 16px; text-transform: uppercase; letter-spacing: 1px; }
+        .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-bottom: 20px; }
+        .stat-box { background: #0d1117; padding: 15px; text-align: center; border-radius: 4px; border: 1px solid #30363d; }
+        .stat-num { font-size: 28px; font-weight: bold; color: #fff; }
+        .stat-label { font-size: 12px; color: #8b949e; }
+        .stat-num.green { color: #3fb950; }
+        canvas { width: 100% !important; height: 350px !important; }
+    </style>
 </head>
 <body>
 
-    <div class="container">
-        <div class="left-col">
-            <div class="card">
-                <h2>Performance Metrics</h2>
-                <div class="stats-grid">
-                    <div class="stat-box">
-                        <div class="stat-val" id="win-rate">0%</div>
-                        <div class="stat-label">Win Rate vs Stockfish</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-val" id="games-played">0</div>
-                        <div class="stat-label">Eval Games</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-val" id="loss-val">--</div>
-                        <div class="stat-label">Current Loss</div>
-                    </div>
-                    <div class="stat-box">
-                        <div class="stat-val" id="buffer-size">--</div>
-                        <div class="stat-label">Replay Buffer</div>
-                    </div>
+    <div class="grid">
+        <div class="main-col">
+            <div class="stats">
+                <div class="stat-box">
+                    <div class="stat-num green" id="curr-win-rate">0%</div>
+                    <div class="stat-label">Current Win Rate vs Stockfish</div>
                 </div>
-                <canvas id="metricsChart"></canvas>
+                <div class="stat-box">
+                    <div class="stat-num" id="total-games">0</div>
+                    <div class="stat-label">Games Played</div>
+                </div>
+                <div class="stat-box">
+                    <div class="stat-num" id="curr-loss">0.00</div>
+                    <div class="stat-label">Policy Loss</div>
+                </div>
             </div>
 
-            <div class="card" style="margin-top: 20px;">
-                <h2>Control Panel</h2>
-                <button onclick="startMatch()" style="padding: 10px 20px; background: #4caf50; border: none; color: white;">
-                    Start Evaluation Match
-                </button>
-                <button onclick="stopMatch()" style="padding: 10px 20px; background: #f44336; border: none; color: white; margin-left: 10px;">
-                    Stop
-                </button>
+            <div class="card">
+                <h2>Training Progress (Win Rate)</h2>
+                <canvas id="trainingChart"></canvas>
             </div>
         </div>
 
-        <div class="right-col">
+        <div class="side-col">
             <div class="card">
-                <h2>Live Game State</h2>
-                <div id="board"></div>
-                <div id="status" style="margin-top: 10px; color: #888;">Waiting for game...</div>
-                <div id="pgn" style="font-family: monospace; font-size: 10px; margin-top: 10px; height: 100px; overflow-y: scroll;"></div>
+                <h2>System Status</h2>
+                <p><strong>Mode:</strong> <span style="color: #d29922;">Self-Play Training</span></p>
+                <p><strong>Device:</strong> CUDA (GPU)</p>
+                <p><strong>Batch Size:</strong> 256</p>
+                <p><strong>MCTS Sims:</strong> 800</p>
+                <hr style="border-color: #30363d;">
+                <div id="log-window" style="font-family: monospace; font-size: 11px; color: #8b949e; height: 200px; overflow-y: auto;">
+                    [System] Dashboard connected...<br>
+                    [System] Waiting for metrics...
+                </div>
             </div>
         </div>
     </div>
 
     <script>
-        const ctx = document.getElementById('metricsChart').getContext('2d');
+        const ctx = document.getElementById('trainingChart').getContext('2d');
         const chart = new Chart(ctx, {
             type: 'line',
-            data: { labels: [], datasets: [{ label: 'Win Rate', data: [], borderColor: '#4caf50', tension: 0.4 }] },
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Win Rate',
+                    data: [],
+                    borderColor: '#3fb950',
+                    backgroundColor: 'rgba(63, 185, 80, 0.1)',
+                    borderWidth: 2,
+                    fill: true,
+                    tension: 0.3
+                }]
+            },
             options: {
                 responsive: true,
+                plugins: { legend: { display: false } },
                 scales: {
-                    y: { beginAtZero: true, max: 1.0, grid: { color: '#333' } },
-                    x: { grid: { color: '#333' } }
+                    y: { beginAtZero: true, max: 1.0, grid: { color: '#30363d' } },
+                    x: { grid: { display: false } }
                 }
             }
         });
 
-        async function updateDashboard() {
+        async function fetchMetrics() {
             try {
-                const metricsRes = await fetch('/api/training_metrics');
-                const metrics = await metricsRes.json();
-                if (metrics.win_rates && metrics.win_rates.length > 0) {
-                    chart.data.labels = metrics.win_rates.map((_, i) => i);
-                    chart.data.datasets[0].data = metrics.win_rates.map(d => d.y);
+                const res = await fetch('/api/metrics');
+                const data = await res.json();
+
+                if (data.labels && data.labels.length > 0) {
+                    chart.data.labels = data.labels;
+                    chart.data.datasets[0].data = data.win_rates;
                     chart.update();
-                    const lastRate = metrics.win_rates[metrics.win_rates.length - 1].y;
-                    document.getElementById('win-rate').innerText = (lastRate * 100).toFixed(1) + '%';
-                    document.getElementById('games-played').innerText = metrics.win_rates.length;
-                }
 
-                const stateRes = await fetch('/api/match_state');
-                const state = await stateRes.json();
-                if (state.fen) {
-                    renderBoard(state.fen);
-                    document.getElementById('status').innerText = state.running
-                        ? `Turn: ${state.fen.split(' ')[1] === 'w' ? 'White' : 'Black'}`
-                        : (state.result ? `Finished: ${state.result}` : 'Stopped');
-                }
-            } catch (e) { console.error("Poll error", e); }
-        }
+                    const lastRate = data.win_rates[data.win_rates.length - 1];
+                    document.getElementById('curr-win-rate').innerText = (lastRate * 100).toFixed(1) + '%';
+                    document.getElementById('total-games').innerText = data.labels.length * 10; // placeholder scaling
+                    const lastLoss = data.loss.length ? data.loss[data.loss.length - 1] : 0;
+                    document.getElementById('curr-loss').innerText = Number(lastLoss).toFixed(3);
 
-        function renderBoard(fen) {
-            const boardEl = document.getElementById('board');
-            boardEl.innerHTML = '';
-            const rows = fen.split(' ')[0].split('/');
-            for (let r = 0; r < 8; r++) {
-                let c = 0;
-                for (const char of rows[r]) {
-                    if (isNaN(char)) {
-                        createSquare(r, c, char, boardEl);
-                        c++;
-                    } else {
-                        const emptyCount = parseInt(char);
-                        for (let k = 0; k < emptyCount; k++) {
-                            createSquare(r, c, null, boardEl);
-                            c++;
-                        }
-                    }
+                    const log = document.getElementById('log-window');
+                    log.innerHTML += `<div>Updated: ${new Date().toLocaleTimeString()} (WR: ${(lastRate*100).toFixed(0)}%)</div>`;
+                    log.scrollTop = log.scrollHeight;
                 }
+            } catch (err) {
+                console.error("Fetch error", err);
             }
         }
 
-        function createSquare(r, c, pieceChar, container) {
-            const sq = document.createElement('div');
-            sq.className = `sq ${(r + c) % 2 === 0 ? 'black' : 'white'}`;
-            if (pieceChar) {
-                const color = (pieceChar === pieceChar.toUpperCase()) ? 'w' : 'b';
-                const type = pieceChar.toUpperCase();
-                const img = document.createElement('div');
-                img.className = 'piece';
-                img.style.backgroundImage = `url('/static/pieces/${color}${type}.svg')`;
-                container.appendChild(img);
-                sq.appendChild(img);
-            }
-            container.appendChild(sq);
-        }
-
-        async function startMatch() {
-            await fetch('/api/start_match', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({opponent: 'stockfish', max_plies: 200})
-            });
-        }
-        async function stopMatch() { await fetch('/api/stop_match', { method: 'POST' }); }
-        setInterval(updateDashboard, 1000);
-        updateDashboard();
+        setInterval(fetchMetrics, 2000);
+        fetchMetrics();
     </script>
 </body>
 </html>

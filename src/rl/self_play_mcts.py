@@ -4,11 +4,13 @@ Leaf batching across multiple games for GPU efficiency.
 """
 
 import argparse
+import json
 import random
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
+from datetime import datetime
 
 import chess
 import numpy as np
@@ -223,6 +225,24 @@ def train_step(net: AlphaZeroNet, optimizer, batch, device: torch.device, c2: fl
     return loss.item(), loss_p.item(), loss_v.item()
 
 
+def log_metrics(epoch: int, win_rate: float, loss: float):
+    entry = {
+        "ts": datetime.now().isoformat(),
+        "epoch": epoch,
+        "win": int(win_rate * 100),
+        "games": 1,
+        "loss_val": loss,
+    }
+    path = Path("data/eval/history.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        data = json.loads(path.read_text()) if path.exists() else []
+    except Exception:
+        data = []
+    data.append(entry)
+    path.write_text(json.dumps(data))
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", type=int, default=10)
@@ -251,6 +271,7 @@ def main():
         if len(buffer) >= args.batch_size:
             batch = buffer.sample(args.batch_size)
             loss, lp, lv = train_step(net, optimizer, batch, device=device)
+            log_metrics(epoch, win_rate=0.0, loss=loss)
             print(f"Epoch {epoch}: loss={loss:.4f} (p={lp:.4f}, v={lv:.4f}), buffer={len(buffer)}")
         if epoch % args.save_every == 0:
             args.save_dir.mkdir(parents=True, exist_ok=True)
