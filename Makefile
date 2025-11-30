@@ -1,4 +1,4 @@
-.PHONY: install download prep train-supervised train-rl play clean stop
+.PHONY: install download prep train-supervised train-rl play clean stop stop-tensorboard
 
 PYTHON ?= python3
 # --- Hardware & Compute ---
@@ -105,3 +105,8 @@ stop:
 	@pkill -f "self_play_mcts.py" || true
 	@pkill -f "supervised_baseline.py" || true
 	@pkill -f "uvicorn" || true
+	@pkill -f "tensorboard" || true
+
+stop-tensorboard:
+	@echo "Stopping tensorboard..."
+	@pkill -f "tensorboard" || true
