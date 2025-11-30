@@ -18,6 +18,7 @@ BUFFER_CAP := 200000
 
 # --- Web UI Configuration ---
 WEB_PORT := 4444
+TENSORBOARD_PORT ?= 6006
 
 # --- Paths ---
 RAW_DIR := data/raw
@@ -93,7 +94,7 @@ play:
 # --- Utilities ---
 
 tensorboard:
-	tensorboard --logdir $(LOG_DIR) --port 6006
+	tensorboard --logdir $(LOG_DIR) --port $(TENSORBOARD_PORT)
 
 clean:
 	rm -rf __pycache__ .pytest_cache
