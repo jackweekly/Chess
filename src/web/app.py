@@ -20,7 +20,7 @@ from fastapi.staticfiles import StaticFiles
 
 from src.models.alphazero import AlphaZeroNet
 from src.rl.encoders import get_input_tensor
-from src.rl.self_play_mcts import MCTS, load_move_encoder
+from src.rl.action_encoding import ActionEncoder
 
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
@@ -37,10 +37,8 @@ search_time = None
 
 # RL / Model State
 policy_model: Optional[nn.Module] = None
-mcts_instance: Optional[MCTS] = None
 policy_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-idx_to_move: List[str] = []
-move_to_idx: Dict[str, int] = {}
+action_encoder = ActionEncoder()
 eval_history: List[Dict[str, str]] = []
 current_match: Dict[str, object] = {
     "running": False,
@@ -71,22 +69,40 @@ def maybe_load_engine() -> Optional[chess.engine.SimpleEngine]:
 
 # --- Core Logic ---
 
-def run_mcts_move(b: chess.Board, simulations: int = 100) -> Optional[str]:
-    """Runs MCTS and returns the best move UCI."""
-    if mcts_instance is None:
+def policy_best_move(b: chess.Board) -> Optional[str]:
+    """Greedy best move from policy head with legal masking."""
+    if policy_model is None:
         return None
-    return mcts_instance.get_best_move(b, sims=simulations)
+    tensor, _ = get_input_tensor(b, [b])
+    tensor = tensor.unsqueeze(0).to(policy_device)
+    with torch.no_grad():
+        logits, _ = policy_model(tensor)
+    logits = logits.squeeze(0)
+    legal = list(b.legal_moves)
+    best_mv = None
+    best_logit = -1e9
+    for mv in legal:
+        try:
+            idx = action_encoder.encode(mv, b)
+        except Exception:
+            continue
+        val = logits[idx].item()
+        if val > best_logit:
+            best_logit = val
+            best_mv = mv
+    return best_mv.uci() if best_mv else None
 
 
 async def suggest_move() -> dict:
     if engine_mode == "model":
         if policy_model is None:
             return {"move": None, "source": "model (not loaded)"}
-        best = run_mcts_move(board, simulations=100)
-        tensor = get_input_tensor(board).to(policy_device).unsqueeze(0)
+        best = policy_best_move(board)
+        tensor, _ = get_input_tensor(board, [board])
+        tensor = tensor.to(policy_device).unsqueeze(0)
         with torch.no_grad():
             _, v = policy_model(tensor)
-        return {"move": best, "score": float(v.item()), "source": "AlphaZero (MCTS)"}
+        return {"move": best, "score": float(v.item()), "source": "AlphaZero"}
 
     if engine is None:
         return {"source": "none"}
@@ -111,7 +127,7 @@ async def api_move(payload: dict):
     auto = payload.get("auto", False)
     if auto:
         if engine_mode == "model":
-            best = run_mcts_move(board, simulations=100)
+            best = policy_best_move(board)
             if best:
                 board.push_uci(best)
             return await get_state()
@@ -286,40 +302,16 @@ async def api_load_model(payload: dict):
     global policy_model, mcts_instance, idx_to_move, move_to_idx
     # Trust local checkpoints; set weights_only=False for compatibility
     ckpt = torch.load(path, map_location=policy_device, weights_only=False)
-    if "moves" in ckpt:
-        idx_to_move = [str(x) for x in ckpt["moves"]]
-        move_to_idx = {uci: i for i, uci in enumerate(idx_to_move)}
-    elif "classes" in ckpt:
-        idx_to_move = [str(x) for x in ckpt["classes"]]
-        move_to_idx = {uci: i for i, uci in enumerate(idx_to_move)}
-    else:
-        if not moves_path.exists():
-            raise HTTPException(
-                400,
-                f"Move list not found at {moves_path}; checkpoint has no 'moves' or 'classes'. "
-                "Provide moves_path or use a checkpoint with embedded moves.",
-            )
-        idx_to_move, move_to_idx = load_move_encoder(moves_path)
-    action_size = len(idx_to_move)
     model = AlphaZeroNet(
         channels=ckpt.get("channels", 128),
         blocks=ckpt.get("blocks", 10),
-        n_classes=action_size,
         input_channels=119,
     )
     model.load_state_dict(ckpt.get("model_state", ckpt), strict=False)
     model.to(policy_device)
     model.eval()
     policy_model = model
-    mcts_instance = MCTS(
-        policy_model,
-        device=policy_device,
-        sims=100,
-        move_to_idx=move_to_idx,
-        idx_to_move=idx_to_move,
-        batch_size=32,
-    )
-    return {"status": "loaded", "path": str(path), "moves": len(idx_to_move)}
+    return {"status": "loaded", "path": str(path)}
 
 
 @app.on_event("startup")
