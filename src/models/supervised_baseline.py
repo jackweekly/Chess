@@ -94,10 +94,11 @@ class ResidualBlock(nn.Module):
 
 
 class ConvPolicy(nn.Module):
-    def __init__(self, channels: int, blocks: int, n_classes: int):
+    def __init__(self, channels: int, blocks: int, n_classes: int, input_channels: int = 13):
         super().__init__()
+        self.input_channels = input_channels
         self.stem = nn.Sequential(
-            nn.Conv2d(13, channels, kernel_size=3, padding=1, bias=False),
+            nn.Conv2d(input_channels, channels, kernel_size=3, padding=1, bias=False),
             nn.BatchNorm2d(channels),
             nn.ReLU(inplace=True),
         )
@@ -111,12 +112,37 @@ class ConvPolicy(nn.Module):
         )
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: (batch, 13*64)
-        x = x.view(-1, 13, 8, 8)
+        # x: (batch, C*64)
+        x = x.view(-1, self.input_channels, 8, 8)
         out = self.stem(x)
         out = self.resblocks(out)
         logits = self.head(out)
         return logits
+
+
+class AlphaZeroNet(ConvPolicy):
+    """ResNet policy head reused for RL with an added value head."""
+
+    def __init__(self, channels: int = 128, blocks: int = 10, n_classes: int = 4096, input_channels: int = 103):
+        super().__init__(channels=channels, blocks=blocks, n_classes=n_classes, input_channels=input_channels)
+        self.value_head = nn.Sequential(
+            nn.Conv2d(channels, 1, kernel_size=1),
+            nn.BatchNorm2d(1),
+            nn.ReLU(inplace=True),
+            nn.Flatten(),
+            nn.Linear(64, 256),
+            nn.ReLU(inplace=True),
+            nn.Linear(256, 1),
+            nn.Tanh(),
+        )
+
+    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        x = x.view(-1, self.input_channels, 8, 8)
+        out = self.stem(x)
+        out = self.resblocks(out)
+        pi = self.head(out)
+        v = self.value_head(out)
+        return pi, v
 
 
 def load_label_encoder(output_dir: Path) -> np.ndarray:

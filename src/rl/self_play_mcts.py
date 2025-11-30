@@ -16,49 +16,67 @@ import numpy as np
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from src.models.supervised_baseline import AlphaZeroNet
 
 
-def board_to_tensor(board: chess.Board) -> torch.Tensor:
-    planes = np.zeros((13, 8, 8), dtype=np.float32)
-    for sq in chess.SQUARES:
-        p = board.piece_at(sq)
-        if p:
-            idx = (p.color * 6) + (p.piece_type - 1)
-            planes[idx, sq // 8, sq % 8] = 1.0
-    planes[12, :, :] = 1.0 if board.turn == chess.WHITE else 0.0
-    return torch.from_numpy(planes)
+def move_to_index(move: chess.Move) -> int:
+    """Map a move to a flat 4096 index (from_square * 64 + to_square). Promotions share the same index."""
+    return move.from_square * 64 + move.to_square
 
 
-class PolicyValueNet(nn.Module):
-    def __init__(self, channels: int = 64):
-        super().__init__()
-        self.body = nn.Sequential(
-            nn.Conv2d(13, channels, 3, padding=1),
-            nn.ReLU(),
-            nn.Conv2d(channels, channels, 3, padding=1),
-            nn.ReLU(),
-        )
-        self.policy_head = nn.Sequential(
-            nn.Conv2d(channels, 2, 1),
-            nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(2 * 8 * 8, 4672),  # legal move upper bound
-        )
-        self.value_head = nn.Sequential(
-            nn.Conv2d(channels, 1, 1),
-            nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(8 * 8, 64),
-            nn.ReLU(),
-            nn.Linear(64, 1),
-            nn.Tanh(),
-        )
+def get_extensive_board_tensor(board: chess.Board, history: List[chess.Board] | None = None) -> torch.Tensor:
+    """
+    AlphaZero-style encoding with temporal context and metadata.
+    - 8 historical board states (12 planes each: 6 pieces x 2 colors) = 96 planes
+    - +7 metadata planes (castling rights, side to move, repetition flag, move count) = 103 planes total
+    """
+    if history is None:
+        history = [board]
 
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        h = self.body(x)
-        p = self.policy_head(h)
-        v = self.value_head(h)
-        return p, v
+    # Keep the last 8 states; pad with the oldest if shorter.
+    history_states = list(history)[-8:]
+    if len(history_states) < 8:
+        history_states = [history_states[0]] * (8 - len(history_states)) + history_states
+
+    planes: list[np.ndarray] = []
+
+    # Piece planes for each historical board.
+    for b in history_states:
+        board_planes = np.zeros((12, 8, 8), dtype=np.float32)
+        for sq in chess.SQUARES:
+            p = b.piece_at(sq)
+            if p:
+                idx = (p.color * 6) + (p.piece_type - 1)
+                board_planes[idx, sq // 8, sq % 8] = 1.0
+        planes.append(board_planes)
+
+    # Metadata planes for the current board only.
+    meta_planes = np.zeros((7, 8, 8), dtype=np.float32)
+    if board.has_kingside_castling_rights(chess.WHITE):
+        meta_planes[0, :, :] = 1
+    if board.has_queenside_castling_rights(chess.WHITE):
+        meta_planes[1, :, :] = 1
+    if board.has_kingside_castling_rights(chess.BLACK):
+        meta_planes[2, :, :] = 1
+    if board.has_queenside_castling_rights(chess.BLACK):
+        meta_planes[3, :, :] = 1
+    if board.turn == chess.WHITE:
+        meta_planes[4, :, :] = 1
+    if board.is_repetition(2):
+        meta_planes[5, :, :] = 1
+    meta_planes[6, :, :] = min(len(board.move_stack) / 100.0, 1.0)
+
+    planes.append(meta_planes)
+
+    full_stack = np.concatenate(planes, axis=0)
+    return torch.from_numpy(full_stack).float()
+
+# Backwards-compatible alias; previous code referenced board_to_tensor.
+board_to_tensor = get_extensive_board_tensor
+
+
+# Backwards-compatible alias pointing to the stronger ResNet-based model.
+PolicyValueNet = AlphaZeroNet
 
 
 @dataclass
@@ -80,22 +98,33 @@ class MCTS:
         self.sims = sims
         self.c_puct = c_puct
 
-    def run(self, board: chess.Board) -> List[float]:
+    def get_masked_logits(self, board: chess.Board, logits: torch.Tensor) -> torch.Tensor:
+        """Mask illegal moves to a large negative value so softmax ignores them."""
+        mask = torch.full_like(logits, -1e9)
+        legal_indices = [move_to_index(m) for m in board.legal_moves]
+        mask[legal_indices] = logits[legal_indices]
+        return mask
+
+    def run(self, board: chess.Board, history: List[chess.Board] | None = None, sims: int | None = None) -> List[float]:
+        root_history = [b.copy(stack=False) for b in (history or [board])]
         root = Node(prior=1.0, children={})
-        self._expand(root, board)
-        for _ in range(self.sims):
+        self._expand(root, board, root_history)
+        total_sims = sims if sims is not None else self.sims
+        for _ in range(total_sims):
             b_copy = board.copy()
+            history_states = list(root_history)
             node = root
             path = []
             # select
             while node.children:
                 key, node = self._select(node)
                 b_copy.push(chess.Move.from_uci(key))
+                history_states.append(b_copy.copy(stack=False))
                 path.append(node)
             # expand/evaluate
             if not b_copy.is_game_over():
-                self._expand(node, b_copy)
-                value = self._evaluate(b_copy)
+                self._expand(node, b_copy, history_states)
+                value = self._evaluate(b_copy, history_states)
             else:
                 res = b_copy.result()
                 value = 0.0 if res == "1/2-1/2" else (1.0 if res == "1-0" else -1.0)
@@ -105,15 +134,31 @@ class MCTS:
                 n.value_sum += value
                 value = -value
         # build policy target
-        visits = np.zeros(4672, dtype=np.float32)
+        visits = np.zeros(4096, dtype=np.float32)
         legal = list(board.legal_moves)
         for mv in legal:
             key = mv.uci()
             if key in root.children:
-                visits[legal.index(mv)] = root.children[key].visit
-        if visits.sum() > 0:
-            visits /= visits.sum()
+                visits[move_to_index(mv)] = root.children[key].visit
+        total = visits.sum()
+        if total > 0:
+            visits /= total
         return visits.tolist()
+
+    def get_best_move(self, board: chess.Board, history: List[chess.Board] | None = None, sims: int | None = None) -> str:
+        """Runs MCTS and returns the UCI of the most visited legal move."""
+        visits = self.run(board, history=history, sims=sims)
+        legal = list(board.legal_moves)
+        if not legal:
+            raise ValueError("No legal moves available")
+        best_move = legal[0]
+        best_score = -1.0
+        for mv in legal:
+            score = visits[move_to_index(mv)]
+            if score > best_score:
+                best_score = score
+                best_move = mv
+        return best_move.uci()
 
     def _select(self, node: Node) -> Tuple[str, Node]:
         total = math.sqrt(sum(child.visit for child in node.children.values()) + 1)
@@ -127,20 +172,22 @@ class MCTS:
                 best = (key, child)
         return best
 
-    def _expand(self, node: Node, board: chess.Board):
-        logits, _ = self._forward(board)
+    def _expand(self, node: Node, board: chess.Board, history: List[chess.Board]):
+        logits, _ = self._forward(board, history)
+        masked_logits = self.get_masked_logits(board, logits)
+        priors = torch.softmax(masked_logits, dim=0).detach().cpu().numpy()
         legal = list(board.legal_moves)
-        priors = torch.softmax(logits[: len(legal)], dim=0).detach().cpu().numpy()
         node.children = {}
-        for mv, p in zip(legal, priors):
-            node.children[mv.uci()] = Node(prior=float(p), children={}, move=mv)
+        for mv in legal:
+            idx = move_to_index(mv)
+            node.children[mv.uci()] = Node(prior=float(priors[idx]), children={}, move=mv)
 
-    def _evaluate(self, board: chess.Board) -> float:
-        _, v = self._forward(board)
+    def _evaluate(self, board: chess.Board, history: List[chess.Board]) -> float:
+        _, v = self._forward(board, history)
         return float(v.item())
 
-    def _forward(self, board: chess.Board) -> Tuple[torch.Tensor, torch.Tensor]:
-        t = board_to_tensor(board).unsqueeze(0).to(self.device)
+    def _forward(self, board: chess.Board, history: List[chess.Board]) -> Tuple[torch.Tensor, torch.Tensor]:
+        t = get_extensive_board_tensor(board, history).unsqueeze(0).to(self.device)
         logits, value = self.net(t)
         return logits.squeeze(0), value.squeeze(0)
 
@@ -165,17 +212,25 @@ def self_play(net: PolicyValueNet, mcts: MCTS, device: torch.device, games: int)
     samples = []
     for _ in range(games):
         b = chess.Board()
+        history_states: List[chess.Board] = [b.copy(stack=False)]
         states = []
         policies = []
         players = []
         while not b.is_game_over():
-            pi = torch.tensor(mcts.run(b), dtype=torch.float32)
-            states.append(board_to_tensor(b))
+            pi = torch.tensor(mcts.run(b, history_states), dtype=torch.float32)
+            states.append(get_extensive_board_tensor(b, history_states))
             policies.append(pi)
             players.append(1 if b.turn == chess.WHITE else -1)
             legal = list(b.legal_moves)
-            idx = torch.multinomial(pi[: len(legal)], 1).item()
+            legal_indices = [move_to_index(mv) for mv in legal]
+            legal_probs = pi[legal_indices]
+            if legal_probs.sum() <= 0:
+                legal_probs = torch.ones(len(legal), dtype=torch.float32) / len(legal)
+            else:
+                legal_probs = legal_probs / legal_probs.sum()
+            idx = torch.multinomial(legal_probs, 1).item()
             b.push(legal[idx])
+            history_states.append(b.copy(stack=False))
         res = b.result()
         z = 0.0 if res == "1/2-1/2" else (1.0 if res == "1-0" else -1.0)
         for s, p, pl in zip(states, policies, players):
@@ -191,7 +246,11 @@ def train_step(net: PolicyValueNet, optimizer, batch, device: torch.device, c2: 
     optimizer.zero_grad()
     logits, values = net(states)
     logp = torch.log_softmax(logits, dim=1)
-    loss_p = -(targets_p * logp).sum(dim=1).mean()
+    # Only optimize over moves that have nonzero target probability (i.e., legal/visited).
+    mask = (targets_p > 0).float()
+    # Avoid division by zero if a row has all zeros (fallback to averaging over all moves).
+    normalizer = mask.sum(dim=1, keepdim=True).clamp(min=1.0)
+    loss_p = -((targets_p * logp * mask).sum(dim=1) / normalizer.squeeze()).mean()
     loss_v = nn.MSELoss()(values.squeeze(), targets_v)
     loss = loss_p + c2 * loss_v
     loss.backward()
@@ -204,7 +263,8 @@ def main():
     parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--games-per-epoch", type=int, default=10)
     parser.add_argument("--mcts-sims", type=int, default=64)
-    parser.add_argument("--channels", type=int, default=64)
+    parser.add_argument("--channels", type=int, default=128)
+    parser.add_argument("--blocks", type=int, default=10)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--buffer-cap", type=int, default=50000)
@@ -213,7 +273,7 @@ def main():
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    net = PolicyValueNet(channels=args.channels).to(device)
+    net = PolicyValueNet(channels=args.channels, blocks=args.blocks, n_classes=4096, input_channels=103).to(device)
     optimizer = optim.Adam(net.parameters(), lr=args.lr)
     mcts = MCTS(net, device=device, sims=args.mcts_sims)
     buffer = ReplayBuffer(capacity=args.buffer_cap)

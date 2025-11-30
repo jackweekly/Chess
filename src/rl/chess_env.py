@@ -2,6 +2,9 @@ import gymnasium as gym
 import numpy as np
 import chess
 from gymnasium import spaces
+from typing import List
+
+from .self_play_mcts import get_extensive_board_tensor
 
 class ChessEnv(gym.Env):
     """
@@ -15,21 +18,20 @@ class ChessEnv(gym.Env):
     def __init__(self, render_mode=None):
         super().__init__()
         self.board = chess.Board()
+        self.history: List[chess.Board] = [self.board.copy(stack=False)]
         self.render_mode = render_mode
         
         # Action space: 64 * 64 = 4096 possible moves (from_square -> to_square)
         # We ignore underpromotions for simplicity (always promote to Queen)
         self.action_space = spaces.Discrete(64 * 64)
         
-        # Observation space: 8x8 board with 13 planes
-        # Planes 0-5: White pieces (P, N, B, R, Q, K)
-        # Planes 6-11: Black pieces (P, N, B, R, Q, K)
-        # Plane 12: 1 if White's turn, 0 if Black's turn
-        self.observation_space = spaces.Box(low=0, high=1, shape=(13, 8, 8), dtype=np.float32)
+        # Observation space: 103 planes (8 x 12 piece history + 7 metadata)
+        self.observation_space = spaces.Box(low=0, high=1, shape=(103, 8, 8), dtype=np.float32)
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
         self.board.reset()
+        self.history = [self.board.copy(stack=False)]
         return self._get_obs(), self._get_info()
 
     def step(self, action):
@@ -49,6 +51,7 @@ class ChessEnv(gym.Env):
         # Check legality
         if move in self.board.legal_moves:
             self.board.push(move)
+            self.history.append(self.board.copy(stack=False))
             terminated = self.board.is_game_over()
             truncated = False
             
@@ -83,19 +86,8 @@ class ChessEnv(gym.Env):
         pass
 
     def _get_obs(self):
-        planes = np.zeros((13, 8, 8), dtype=np.float32)
-        for sq in chess.SQUARES:
-            p = self.board.piece_at(sq)
-            if p:
-                # 0-5 for White, 6-11 for Black
-                layer = (p.piece_type - 1) + (0 if p.color == chess.WHITE else 6)
-                row, col = divmod(sq, 8)
-                planes[layer, row, col] = 1.0
-        
-        if self.board.turn == chess.WHITE:
-            planes[12, :, :] = 1.0
-            
-        return planes
+        # Reuse the AlphaZero-style tensor and return numpy for Gym.
+        return get_extensive_board_tensor(self.board, self.history).numpy()
 
     def _get_info(self):
         return {

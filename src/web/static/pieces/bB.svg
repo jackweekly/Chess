@@ -1,8 +1,1 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="60" height="60">
-  <g fill="#000" stroke="#000" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M30 10c4 6 7 10 7 16s-3 10-7 10-7-4-7-10 3-10 7-16z" fill="#111" />
-    <path d="M24 36h12l4 4H20z" fill="#111" stroke="#000"/>
-    <path d="M22 32h16" stroke="#eee" stroke-width="1.2"/>
-    <circle cx="30" cy="18" r="1.5" fill="#fff"/>
-  </g>
-</svg>
+404: Not Found
