@@ -7,6 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 import contextlib
+import random
 
 import chess
 import chess.engine
@@ -242,33 +243,36 @@ async def api_match_state():
 async def run_match_loop(delay: float):
     """Simple match runner: model vs stockfish (if available) or random."""
     while current_match["running"]:
-        if board.is_game_over():
+        try:
+            if board.is_game_over():
+                current_match["running"] = False
+                current_match["result"] = board.result()
+                break
+            model_turn = (board.turn == chess.WHITE and current_match["model_as_white"]) or (
+                board.turn == chess.BLACK and not current_match["model_as_white"]
+            )
+            move = None
+            if model_turn and mcts_instance is not None:
+                try:
+                    move = mcts_instance.get_best_move(board, sims=50)
+                except Exception:
+                    move = None
+            elif not model_turn and engine is not None:
+                try:
+                    info = await engine.play(board, limit=chess.engine.Limit(time=0.05))
+                    if info.move:
+                        move = info.move.uci()
+                except Exception:
+                    move = None
+            if move is None:
+                legal = list(board.legal_moves)
+                if legal:
+                    move = random.choice(legal).uci()
+            if move:
+                board.push_uci(move)
+        except Exception:
             current_match["running"] = False
-            current_match["result"] = board.result()
             break
-        # Decide whose turn
-        model_turn = (board.turn == chess.WHITE and current_match["model_as_white"]) or (
-            board.turn == chess.BLACK and not current_match["model_as_white"]
-        )
-        move = None
-        if model_turn and mcts_instance is not None:
-            try:
-                move = mcts_instance.get_best_move(board, sims=50)
-            except Exception:
-                move = None
-        elif not model_turn and engine is not None:
-            try:
-                info = await engine.play(board, limit=chess.engine.Limit(time=0.05))
-                if info.move:
-                    move = info.move.uci()
-            except Exception:
-                move = None
-        if move is None:
-            legal = list(board.legal_moves)
-            if legal:
-                move = random.choice(legal).uci()
-        if move:
-            board.push_uci(move)
         await asyncio.sleep(delay)
 
 
