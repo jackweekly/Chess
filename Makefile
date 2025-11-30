@@ -78,8 +78,7 @@ train-rl:
 			--mcts-sims $(MCTS_SIMS) \
 			--batch-size $(BATCH_SIZE) \
 			--buffer-cap $(BUFFER_CAP) \
-			--save-dir $(RL_CKPT_DIR) \
-			--load-checkpoint $(SUPERVISED_CKPT); \
+			--save-dir $(RL_CKPT_DIR); \
 	else \
 		PYTHONPATH=. $(PYTHON) -m src.rl.self_play_mcts \
 			--channels $(MODEL_CHANNELS) \
@@ -87,8 +86,7 @@ train-rl:
 			--mcts-sims $(MCTS_SIMS) \
 			--batch-size $(BATCH_SIZE) \
 			--buffer-cap $(BUFFER_CAP) \
-			--save-dir $(RL_CKPT_DIR) \
-			--load-checkpoint $(SUPERVISED_CKPT); \
+			--save-dir $(RL_CKPT_DIR); \
 	fi
 
 # --- Phase 3: Deployment / Visualization ---
