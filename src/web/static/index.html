@@ -525,7 +525,8 @@
     async function loadModel() {
       setError('');
       const path = document.getElementById('modelPath').value.trim() || 'checkpoints/supervised_policy.pt';
-      const res = await fetch('/api/load_model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path }) });
+      const moves_path = 'data/processed/supervised/label_encoder_classes.npy';
+      const res = await fetch('/api/load_model', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, moves_path }) });
       if (!res.ok) {
         let msg = 'Load model failed';
         try { const data = await res.json(); msg = data.detail || msg; } catch (_) { msg = await res.text(); }
