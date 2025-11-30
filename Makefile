@@ -1,120 +1,106 @@
-.PHONY: install download prep train self-play stockfish stop run-web
+.PHONY: install download prep train-supervised train-rl play clean stop
 
 PYTHON ?= python3
-KAGGLE_CONFIG_DIR := $(PWD)
+# --- Hardware & Compute ---
+GPUS ?= 1
+NUM_WORKERS ?= 16
+
+# --- Model Architecture ("HUGE" Settings) ---
+MODEL_ARCH := conv
+MODEL_CHANNELS := 128
+MODEL_BLOCKS := 10
+
+# --- Training Hyperparams ---
+BATCH_SIZE := 256
+EPOCHS := 100
+MCTS_SIMS := 800
+BUFFER_CAP := 200000
+
+# --- Web UI Configuration ---
+WEB_PORT := 4444
+
+# --- Paths ---
 RAW_DIR := data/raw
 PROC_DIR := data/processed/supervised
-PGN_FILE ?= $(RAW_DIR)/chess_games.csv
-MAX_GAMES ?= 0          # 0 = all games
-MAX_MOVES ?= 0          # 0 = full games
-EPOCHS ?= 5
-BATCH_SIZE ?= 128
-GPUS ?= 1
-SHARD_SIZE ?= 250000
-VAL_FRAC ?= 0.1
-CSV_ENGINE ?= pyarrow
-CSV_CHUNKSIZE ?= 1000
-CSV_THREADS ?= 16
-CSV_BLOCK_SIZE ?= 8388608
-NUM_WORKERS ?= 16
-READ_BATCH ?= 16384
-MAX_TRAIN_BATCHES ?= 2000
-MAX_VAL_BATCHES ?= 200
-TRIALS ?= 4
-TUNE_MAX_TRAIN_BATCHES ?= 50
-TUNE_MAX_VAL_BATCHES ?= 20
-TUNE_MAX_TRAIN_FILES ?= 1
-TUNE_MAX_VAL_FILES ?= 1
-TRAIN_EXTRA ?=
-TUNE_EXTRA ?=
-WEB_PORT ?= 8000
-STOCKFISH_REPO := https://github.com/official-stockfish/Stockfish.git
-STOCKFISH_DIR := third_party/stockfish
+CHECKPOINT_DIR := checkpoints
+SUPERVISED_CKPT := $(CHECKPOINT_DIR)/supervised_policy.pt
+RL_CKPT_DIR := $(CHECKPOINT_DIR)/rl
+LOG_DIR := logs
+
+# --- Setup Commands ---
 
 install:
 	@if ! command -v uv >/dev/null 2>&1; then \
-		echo "uv not found; installing via pip..."; \
-		$(PYTHON) -m pip install --upgrade pip && $(PYTHON) -m pip install uv; \
-	else \
-		echo "uv found; using existing installation."; \
+		echo "Installing uv..."; \
+		$(PYTHON) -m pip install uv; \
 	fi
 	uv pip install -r requirements.txt
 
-download: stockfish
-	KAGGLE_CONFIG_DIR=$(KAGGLE_CONFIG_DIR) $(PYTHON) src/data/download_dataset.py --output-dir $(RAW_DIR)
-
-stockfish:
-	@mkdir -p $(dir $(STOCKFISH_DIR))
-	@if [ -d "$(STOCKFISH_DIR)/.git" ]; then \
-		echo "Checking Stockfish for updates..."; \
-		git -C $(STOCKFISH_DIR) fetch origin; \
-		if git -C $(STOCKFISH_DIR) status -sb | grep -q "\[behind"; then \
-			echo "Updating Stockfish..."; \
-			git -C $(STOCKFISH_DIR) pull --ff-only; \
-		else \
-			echo "Stockfish already up to date."; \
-		fi; \
-	else \
-		echo "Cloning Stockfish..."; \
-		git clone $(STOCKFISH_REPO) $(STOCKFISH_DIR); \
-	fi
-	@echo "Building Stockfish..."
-	@$(MAKE) -C $(STOCKFISH_DIR)/src build
-
-prep:
-	PYARROW_NUM_THREADS=$(CSV_THREADS) OMP_NUM_THREADS=$(CSV_THREADS) NUMEXPR_MAX_THREADS=$(CSV_THREADS) $(PYTHON) src/data/prepare_supervised_dataset.py --pgn $(PGN_FILE) --output-dir $(PROC_DIR) --max-games $(MAX_GAMES) --max-moves $(MAX_MOVES) --val-frac $(VAL_FRAC) --shard-size $(SHARD_SIZE) --csv-engine $(CSV_ENGINE) --csv-chunksize $(CSV_CHUNKSIZE) --csv-threads $(CSV_THREADS) --csv-block-size $(CSV_BLOCK_SIZE) --num-workers $(NUM_WORKERS)
-
-run:
-	$(MAKE) prep PGN_FILE=data/raw/chess_games.csv SAN_COLUMN=AN MAX_GAMES=0 MAX_MOVES=0 SHARD_SIZE=200000 VAL_FRAC=0.1
-
-train:
+# --- Phase 1: Supervised Learning (Pre-training) ---
+train-supervised:
+	@echo "Starting Supervised Pre-training (ResNet: $(MODEL_CHANNELS)ch, $(MODEL_BLOCKS)blk)..."
+	@mkdir -p $(CHECKPOINT_DIR)
 	@if [ $(GPUS) -gt 1 ]; then \
-		torchrun --nproc_per_node=$(GPUS) src/models/supervised_baseline.py --data-dir $(PROC_DIR) --epochs $(EPOCHS) --batch-size $(BATCH_SIZE) --arch mlp --hidden 768 --read-batch-size $(READ_BATCH) --num-workers $(NUM_WORKERS) --max-train-batches $(MAX_TRAIN_BATCHES) --max-val-batches $(MAX_VAL_BATCHES) --lr 0.001134 --cudnn-benchmark --non-blocking $(TRAIN_EXTRA); \
+		torchrun --nproc_per_node=$(GPUS) src/models/supervised_baseline.py \
+			--data-dir $(PROC_DIR) \
+			--arch $(MODEL_ARCH) \
+			--channels $(MODEL_CHANNELS) \
+			--blocks $(MODEL_BLOCKS) \
+			--batch-size $(BATCH_SIZE) \
+			--epochs $(EPOCHS) \
+			--save-dir $(CHECKPOINT_DIR) \
+			--num-workers $(NUM_WORKERS); \
 	else \
-		$(PYTHON) src/models/supervised_baseline.py --data-dir $(PROC_DIR) --epochs $(EPOCHS) --batch-size $(BATCH_SIZE) --arch mlp --hidden 768 --read-batch-size $(READ_BATCH) --num-workers $(NUM_WORKERS) --max-train-batches $(MAX_TRAIN_BATCHES) --max-val-batches $(MAX_VAL_BATCHES) --lr 0.001134 --cudnn-benchmark --non-blocking $(TRAIN_EXTRA); \
+		$(PYTHON) src/models/supervised_baseline.py \
+			--data-dir $(PROC_DIR) \
+			--arch $(MODEL_ARCH) \
+			--channels $(MODEL_CHANNELS) \
+			--blocks $(MODEL_BLOCKS) \
+			--batch-size $(BATCH_SIZE) \
+			--epochs $(EPOCHS) \
+			--save-dir $(CHECKPOINT_DIR) \
+			--num-workers $(NUM_WORKERS); \
 	fi
 
-self-play:
+# --- Phase 2: Reinforcement Learning (Self-Play) ---
+train-rl:
+	@echo "Starting AlphaZero Loop (MCTS Sims: $(MCTS_SIMS))..."
+	@mkdir -p $(RL_CKPT_DIR)
 	@if [ $(GPUS) -gt 1 ]; then \
-		torchrun --nproc_per_node=$(GPUS) src/rl/self_play.py; \
+		torchrun --nproc_per_node=$(GPUS) src/rl/self_play_mcts.py \
+			--channels $(MODEL_CHANNELS) \
+			--blocks $(MODEL_BLOCKS) \
+			--mcts-sims $(MCTS_SIMS) \
+			--batch-size $(BATCH_SIZE) \
+			--buffer-cap $(BUFFER_CAP) \
+			--save-dir $(RL_CKPT_DIR) \
+			--load-checkpoint $(SUPERVISED_CKPT); \
 	else \
-		$(PYTHON) src/rl/self_play.py; \
+		$(PYTHON) src/rl/self_play_mcts.py \
+			--channels $(MODEL_CHANNELS) \
+			--blocks $(MODEL_BLOCKS) \
+			--mcts-sims $(MCTS_SIMS) \
+			--batch-size $(BATCH_SIZE) \
+			--buffer-cap $(BUFFER_CAP) \
+			--save-dir $(RL_CKPT_DIR) \
+			--load-checkpoint $(SUPERVISED_CKPT); \
 	fi
+
+# --- Phase 3: Deployment / Visualization ---
+play:
+	$(PYTHON) -m uvicorn src.web.app:app --host 0.0.0.0 --port $(WEB_PORT) --reload
+
+# --- Utilities ---
+
+tensorboard:
+	tensorboard --logdir $(LOG_DIR) --port 6006
+
+clean:
+	rm -rf __pycache__ .pytest_cache
+	find . -name "*.pyc" -delete
 
 stop:
-	@echo "Stopping training/self-play processes..."
-	@# Kill prepare_supervised_dataset.py and its children recursively
-	@for pid in $$(pgrep -f "src/data/prepare_supervised_dataset.py"); do \
-		echo "Killing prepare_supervised_dataset.py (PID $$pid) and children..."; \
-		pkill -P $$pid 2>/dev/null || true; \
-		kill $$pid 2>/dev/null || true; \
-	done
-	@pkill -f "src/models/supervised_baseline.py" 2>/dev/null || true
-	@pkill -f "src/rl/self_play.py" 2>/dev/null || true
-	@pkill -f "torchrun.*supervised_baseline.py" 2>/dev/null || true
-	@pkill -f "torchrun.*self_play.py" 2>/dev/null || true
-	@pkill -f "prepare_supervised_dataset.py" 2>/dev/null || true
-	@pkill -f "python3 src/data/prepare_supervised_dataset.py" 2>/dev/null || true
-	@pkill -f "python.*prepare_supervised_dataset.py" 2>/dev/null || true
-	@pkill -9 -f "prepare_supervised_dataset.py" 2>/dev/null || true
-	@pkill -9 -f "python.*prepare_supervised_dataset.py" 2>/dev/null || true
-	@pkill -f "make run" 2>/dev/null || true
-	@pkill -f "make prep" 2>/dev/null || true
-	@pkill -f "tune_supervised.py" 2>/dev/null || true
-	@pkill -9 -f "tune_supervised.py" 2>/dev/null || true
-	@pkill -f "python3 src/models/tune_supervised.py" 2>/dev/null || true
-	@pkill -9 -f "python3 src/models/tune_supervised.py" 2>/dev/null || true
-	@pkill -f "python.*tune_supervised.py" 2>/dev/null || true
-	@pkill -9 -f "python.*tune_supervised.py" 2>/dev/null || true
-	@pkill -f "make tune" 2>/dev/null || true
-	@pkill -9 -f "make tune" 2>/dev/null || true
-	@pkill -f "torchrun.*tune_supervised.py" 2>/dev/null || true
-	@pkill -9 -f "torchrun.*tune_supervised.py" 2>/dev/null || true
-	@pkill -f "python3 .*supervised_baseline.py" 2>/dev/null || true
-	@pkill -9 -f "python3 .*supervised_baseline.py" 2>/dev/null || true
-
-run-web:
-	$(PYTHON) -m uvicorn src.web.app:app --host 0.0.0.0 --port $(WEB_PORT)
-
-tune:
-	$(PYTHON) src/models/tune_supervised.py --data-dir $(PROC_DIR) --trials $(TRIALS) --val-batches 8 --max-train-batches $(TUNE_MAX_TRAIN_BATCHES) --max-val-batches $(TUNE_MAX_VAL_BATCHES) --max-train-files $(TUNE_MAX_TRAIN_FILES) --max-val-files $(TUNE_MAX_VAL_FILES) $(TUNE_EXTRA)
+	@echo "Stopping all training processes..."
+	@pkill -f "self_play_mcts.py" || true
+	@pkill -f "supervised_baseline.py" || true
+	@pkill -f "uvicorn" || true
