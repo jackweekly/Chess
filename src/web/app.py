@@ -15,7 +15,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 from src.models.alphazero import AlphaZeroNet
@@ -46,6 +46,7 @@ current_match: Dict[str, object] = {
     "model_as_white": True,
 }
 match_task: Optional[asyncio.Task] = None
+eval_history_path = Path("data/eval/history.json")
 
 
 def maybe_load_engine() -> Optional[chess.engine.SimpleEngine]:
@@ -65,6 +66,11 @@ def maybe_load_engine() -> Optional[chess.engine.SimpleEngine]:
         return chess.engine.SimpleEngine.popen_uci("stockfish")
     except Exception:
         return None
+
+# --- Health probe ---
+@app.get("/health.ico", include_in_schema=False)
+async def health_check():
+    return Response(status_code=204)
 
 
 # --- Core Logic ---
@@ -254,6 +260,22 @@ async def api_match_state():
         "result": current_match["result"],
         "model_as_white": current_match["model_as_white"],
     }
+
+
+@app.get("/api/training_metrics")
+async def api_training_metrics():
+    if eval_history_path.exists():
+        try:
+            hist = json.loads(eval_history_path.read_text())
+            win_rates = []
+            for h in hist:
+                total = h.get("games", 1)
+                win_rate = h.get("win", 0) / total if total else 0.0
+                win_rates.append({"x": h.get("ts"), "y": win_rate})
+            return {"win_rates": win_rates}
+        except Exception:
+            pass
+    return {"win_rates": []}
 
 
 async def run_match_loop(delay: float):
