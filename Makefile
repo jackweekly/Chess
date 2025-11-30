@@ -28,6 +28,10 @@ SUPERVISED_CKPT := $(CHECKPOINT_DIR)/supervised_policy.pt
 RL_CKPT_DIR := $(CHECKPOINT_DIR)/rl
 LOG_DIR := logs
 
+# --- Assets ---
+PIECE_SET := staunty
+PIECE_LIST := bB bK bN bP bQ bR wB wK wN wP wQ wR
+
 # --- Setup Commands ---
 
 install:
@@ -110,3 +114,9 @@ stop:
 stop-tensorboard:
 	@echo "Stopping tensorboard..."
 	@pkill -f "tensorboard" || true
+
+download-pieces:
+	@echo "Downloading chess piece SVGs ($(PIECE_SET))..."
+	@cd src/web/static/pieces && for p in $(PIECE_LIST); do \
+		curl -sSL -o $${p}.svg https://raw.githubusercontent.com/lichess-org/lila/master/public/piece/$(PIECE_SET)/$${p}.svg; \
+	done
