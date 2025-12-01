@@ -16,6 +16,8 @@ import chess
 import numpy as np
 import torch
 import torch.optim as optim
+import torch.nn as nn
+from torch.cuda.amp import GradScaler, autocast
 
 from src.models.alphazero import AlphaZeroNet
 from src.rl.parallel_mcts import ParallelMCTS
@@ -134,22 +136,23 @@ def self_play_parallel(
     return all_samples
 
 
-def train_step(net, optimizer, batch, device):
+def train_step(net, optimizer, batch, device, scaler, c2: float = 1.0):
     states, pi_targets, v_targets = batch
     states = states.to(device)
     pi_targets = pi_targets.to(device)
     v_targets = v_targets.to(device)
 
     optimizer.zero_grad()
-    pi_logits, v_pred = net(states)
+    with autocast(dtype=torch.float16):
+        pi_logits, v_pred = net(states)
+        log_pi = torch.log_softmax(pi_logits, dim=1)
+        loss_pi = -(pi_targets * log_pi).sum(dim=1).mean()
+        loss_v = nn.MSELoss()(v_pred.squeeze(), v_targets)
+        loss = loss_pi + c2 * loss_v
 
-    log_pi = torch.log_softmax(pi_logits, dim=1)
-    loss_pi = -(pi_targets * log_pi).sum(dim=1).mean()
-    loss_v = torch.nn.MSELoss()(v_pred.squeeze(), v_targets)
-
-    loss = loss_pi + loss_v
-    loss.backward()
-    optimizer.step()
+    scaler.scale(loss).backward()
+    scaler.step(optimizer)
+    scaler.update()
 
     return loss.item(), loss_pi.item(), loss_v.item()
 
@@ -189,6 +192,11 @@ def main():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     net = AlphaZeroNet(input_planes=119, channels=args.channels, blocks=args.blocks).to(device)
+    try:
+        print("Compiling model for optimized execution...")
+        net = torch.compile(net)
+    except Exception as e:
+        print(f"Warning: torch.compile failed: {e}")
 
     if args.load_checkpoint and args.load_checkpoint.exists():
         print(f"Loading checkpoint: {args.load_checkpoint}")
@@ -196,6 +204,7 @@ def main():
         net.load_state_dict(ckpt.get("model_state", ckpt), strict=False)
 
     optimizer = optim.Adam(net.parameters(), lr=args.lr)
+    scaler = GradScaler()
 
     mcts = ParallelMCTS(net, num_games=args.games_per_epoch, sims=args.mcts_sims, device=device)
     buffer = ReplayBuffer(capacity=args.buffer_cap)
@@ -217,7 +226,7 @@ def main():
         if len(buffer) > args.batch_size:
             for _ in range(train_steps):
                 batch = buffer.sample(args.batch_size)
-                l, lp, lv = train_step(net, optimizer, batch, device)
+                l, lp, lv = train_step(net, optimizer, batch, device, scaler)
                 total_loss += l
                 steps += 1
 

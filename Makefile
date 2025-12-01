@@ -9,10 +9,10 @@ GAMES_PER_EPOCH := 128
 # --- Model Architecture ("HUGE" Settings) ---
 MODEL_ARCH := conv
 MODEL_CHANNELS := 256
-MODEL_BLOCKS := 20
+MODEL_BLOCKS := 40
 
 # --- Training Hyperparams ---
-BATCH_SIZE := 1024
+BATCH_SIZE := 4096
 EPOCHS := 100
 MCTS_SIMS := 800
 BUFFER_CAP := 200000
