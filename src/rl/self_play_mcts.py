@@ -111,6 +111,7 @@ def self_play_parallel(
                     results[i] = -1.0
                 else:
                     results[i] = 0.0
+                tqdm.write(f" [Game {i}] Finished: {res} (Turn: {b.turn})")
         step += 1
         pbar.update(1)
         if step % 10 == 0:

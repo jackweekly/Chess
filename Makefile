@@ -4,14 +4,15 @@ PYTHON ?= python3
 # --- Hardware & Compute ---
 GPUS ?= 1
 NUM_WORKERS ?= 16
+GAMES_PER_EPOCH := 128
 
 # --- Model Architecture ("HUGE" Settings) ---
 MODEL_ARCH := conv
-MODEL_CHANNELS := 128
-MODEL_BLOCKS := 10
+MODEL_CHANNELS := 256
+MODEL_BLOCKS := 20
 
 # --- Training Hyperparams ---
-BATCH_SIZE := 256
+BATCH_SIZE := 1024
 EPOCHS := 100
 MCTS_SIMS := 800
 BUFFER_CAP := 200000
@@ -75,6 +76,7 @@ train-rl:
 		PYTHONUNBUFFERED=1 PYTHONPATH=. exec torchrun --nproc_per_node=$(GPUS) -m src.rl.self_play_mcts \
 			--channels $(MODEL_CHANNELS) \
 			--blocks $(MODEL_BLOCKS) \
+			--games-per-epoch $(GAMES_PER_EPOCH) \
 			--mcts-sims $(MCTS_SIMS) \
 			--batch-size $(BATCH_SIZE) \
 			--buffer-cap $(BUFFER_CAP) \
@@ -83,6 +85,7 @@ train-rl:
 		PYTHONUNBUFFERED=1 PYTHONPATH=. exec $(PYTHON) -u -m src.rl.self_play_mcts \
 			--channels $(MODEL_CHANNELS) \
 			--blocks $(MODEL_BLOCKS) \
+			--games-per-epoch $(GAMES_PER_EPOCH) \
 			--mcts-sims $(MCTS_SIMS) \
 			--batch-size $(BATCH_SIZE) \
 			--buffer-cap $(BUFFER_CAP) \
