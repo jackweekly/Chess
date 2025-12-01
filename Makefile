@@ -134,3 +134,14 @@ download-pieces:
 	@cd src/web/static/pieces && for p in $(PIECE_LIST); do \
 		curl -sSL -o $${p}.svg https://raw.githubusercontent.com/lichess-org/lila/master/public/piece/$(PIECE_SET)/$${p}.svg; \
 	done
+
+export-model:
+	PYTHONPATH=. $(PYTHON) export_model.py
+
+build-cpp:
+	@if [ -z "$$TORCH_DIR" ]; then \
+		echo "Please set TORCH_DIR to your LibTorch directory (e.g., export TORCH_DIR=/path/to/libtorch)"; \
+		exit 1; \
+	fi
+	@cmake -S cpp -B cpp/build
+	@cmake --build cpp/build
