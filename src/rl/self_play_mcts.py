@@ -17,9 +17,10 @@ import numpy as np
 import torch
 import torch.optim as optim
 import torch.nn as nn
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 import torch._dynamo
 torch._dynamo.config.suppress_errors = True
+torch.set_float32_matmul_precision('high')
 
 from src.models.alphazero import AlphaZeroNet
 from src.rl.parallel_mcts import ParallelMCTS
@@ -145,7 +146,7 @@ def train_step(net, optimizer, batch, device, scaler, c2: float = 1.0):
     v_targets = v_targets.to(device)
 
     optimizer.zero_grad()
-    with autocast(dtype=torch.float16):
+    with autocast(device_type='cuda', dtype=torch.float16):
         pi_logits, v_pred = net(states)
         log_pi = torch.log_softmax(pi_logits, dim=1)
         loss_pi = -(pi_targets * log_pi).sum(dim=1).mean()
@@ -180,13 +181,13 @@ def log_metrics(epoch: int, win_rate: float, loss: float):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--epochs", type=int, default=100)
-    parser.add_argument("--games-per-epoch", type=int, default=16)
+    parser.add_argument("--games-per-epoch", type=int, default=128)
     parser.add_argument("--mcts-sims", type=int, default=800)
-    parser.add_argument("--channels", type=int, default=128)
-    parser.add_argument("--blocks", type=int, default=10)
+    parser.add_argument("--channels", type=int, default=256)
+    parser.add_argument("--blocks", type=int, default=40)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--batch-size", type=int, default=256)
-    parser.add_argument("--buffer-cap", type=int, default=100000)
+    parser.add_argument("--batch-size", type=int, default=8192)
+    parser.add_argument("--buffer-cap", type=int, default=500000)
     parser.add_argument("--save-every", type=int, default=5)
     parser.add_argument("--save-dir", type=Path, default=Path("checkpoints"))
     parser.add_argument("--load-checkpoint", type=Path, default=None)
@@ -206,7 +207,7 @@ def main():
         net.load_state_dict(ckpt.get("model_state", ckpt), strict=False)
 
     optimizer = optim.Adam(net.parameters(), lr=args.lr)
-    scaler = GradScaler()
+    scaler = GradScaler('cuda')
 
     mcts = ParallelMCTS(net, num_games=args.games_per_epoch, sims=args.mcts_sims, device=device)
     buffer = ReplayBuffer(capacity=args.buffer_cap)
