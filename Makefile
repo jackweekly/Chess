@@ -103,15 +103,11 @@ clean:
 	find . -name "*.pyc" -delete
 
 stop:
-	@echo "Stopping all training processes..."
-	@for pat in "src/rl/self_play_mcts.py" "src.rl.self_play_mcts" "python -m src.rl.self_play_mcts" "torchrun.*self_play_mcts" "self_play_mcts.py"; do \
+	@echo "Force killing all training processes..."
+	@for pat in "src/rl/self_play_mcts.py" "src.rl.self_play_mcts" "python -u -m src.rl.self_play_mcts" "python -m src.rl.self_play_mcts" "torchrun.*self_play_mcts" "self_play_mcts.py" "make train-rl"; do \
 		pkill -f "$$pat" 2>/dev/null || true; \
-	done
-	@for pat in "src/rl/self_play_mcts.py" "src.rl.self_play_mcts" "python -m src.rl.self_play_mcts" "torchrun.*self_play_mcts" "self_play_mcts.py"; do \
 		pkill -9 -f "$$pat" 2>/dev/null || true; \
 	done
-	@pkill -f "make train-rl" 2>/dev/null || true
-	@pkill -9 -f "make train-rl" 2>/dev/null || true
 	@pkill -f "supervised_baseline.py" 2>/dev/null || true
 	@pkill -9 -f "supervised_baseline.py" 2>/dev/null || true
 	@pkill -f "uvicorn" 2>/dev/null || true
@@ -125,14 +121,10 @@ stop-tensorboard:
 
 stop-train-rl:
 	@echo "Stopping train-rl (self_play_mcts.py)..."
-	@for pat in "src/rl/self_play_mcts.py" "src.rl.self_play_mcts" "python -m src.rl.self_play_mcts" "torchrun.*self_play_mcts" "self_play_mcts.py"; do \
+	@for pat in "src/rl/self_play_mcts.py" "src.rl.self_play_mcts" "python -u -m src.rl.self_play_mcts" "python -m src.rl.self_play_mcts" "torchrun.*self_play_mcts" "self_play_mcts.py" "make train-rl"; do \
 		pkill -f "$$pat" 2>/dev/null || true; \
-	done
-	@for pat in "src/rl/self_play_mcts.py" "src.rl.self_play_mcts" "python -m src.rl.self_play_mcts" "torchrun.*self_play_mcts" "self_play_mcts.py"; do \
 		pkill -9 -f "$$pat" 2>/dev/null || true; \
 	done
-	@pkill -f "make train-rl" 2>/dev/null || true
-	@pkill -9 -f "make train-rl" 2>/dev/null || true
 
 download-pieces:
 	@echo "Downloading chess piece SVGs ($(PIECE_SET))..."

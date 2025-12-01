@@ -42,7 +42,13 @@ class ReplayBuffer:
         return len(self.buf)
 
 
-def self_play_parallel(net: AlphaZeroNet, mcts: ParallelMCTS, num_games: int, temperature_moves: int = 30) -> List[Tuple[torch.Tensor, torch.Tensor, float]]:
+def self_play_parallel(
+    net: AlphaZeroNet,
+    mcts: ParallelMCTS,
+    num_games: int,
+    temperature_moves: int = 30,
+    epoch: int = 0,
+) -> List[Tuple[torch.Tensor, torch.Tensor, float]]:
     encoder = mcts.encoder
 
     boards = [chess.Board() for _ in range(num_games)]
@@ -107,6 +113,13 @@ def self_play_parallel(net: AlphaZeroNet, mcts: ParallelMCTS, num_games: int, te
                     results[i] = 0.0
         step += 1
         pbar.update(1)
+        if step % 10 == 0:
+            finished_cnt = sum(finished_games)
+            current_wr = 0.0
+            if finished_cnt > 0:
+                wins = sum(1 for r in results if r == 1.0)
+                current_wr = wins / finished_cnt
+            log_metrics(epoch=epoch, win_rate=current_wr, loss=0.0)
         if step > 400:
             break
 
@@ -189,7 +202,7 @@ def main():
     print(f"Starting Training on {device}...")
     for epoch in range(1, args.epochs + 1):
         print(f"\nEpoch {epoch}: Self-Playing {args.games_per_epoch} games...")
-        samples = self_play_parallel(net, mcts, num_games=args.games_per_epoch)
+        samples = self_play_parallel(net, mcts, num_games=args.games_per_epoch, epoch=epoch)
 
         for s in samples:
             buffer.add(s)
