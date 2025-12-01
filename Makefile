@@ -145,3 +145,16 @@ build-cpp:
 	fi
 	@cmake -S cpp -B cpp/build
 	@cmake --build cpp/build
+
+# Convenience target: downloads LibTorch CUDA (Linux) into third_party/libtorch if TORCH_DIR not set.
+download-libtorch:
+	@mkdir -p third_party
+	@cd third_party && \
+		if [ ! -d libtorch ]; then \
+			echo "Downloading LibTorch CUDA (Linux)..." && \
+			curl -L https://download.pytorch.org/libtorch/cu121/libtorch-cxx11-abi-shared-with-deps-2.2.0%2Bcu121.zip -o libtorch.zip && \
+			unzip -q libtorch.zip && rm libtorch.zip; \
+		else \
+			echo "third_party/libtorch already exists"; \
+		fi
+	@echo "Set TORCH_DIR to $(PWD)/third_party/libtorch"
