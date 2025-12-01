@@ -18,6 +18,8 @@ import torch
 import torch.optim as optim
 import torch.nn as nn
 from torch.cuda.amp import GradScaler, autocast
+import torch._dynamo
+torch._dynamo.config.suppress_errors = True
 
 from src.models.alphazero import AlphaZeroNet
 from src.rl.parallel_mcts import ParallelMCTS

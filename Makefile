@@ -3,8 +3,8 @@
 PYTHON ?= python3
 # --- Hardware & Compute ---
 GPUS ?= 1
-NUM_WORKERS ?= 16
-GAMES_PER_EPOCH := 128
+NUM_WORKERS ?= 32
+GAMES_PER_EPOCH := 256
 
 # --- Model Architecture ("HUGE" Settings) ---
 MODEL_ARCH := conv
@@ -12,10 +12,10 @@ MODEL_CHANNELS := 256
 MODEL_BLOCKS := 40
 
 # --- Training Hyperparams ---
-BATCH_SIZE := 4096
+BATCH_SIZE := 8192
 EPOCHS := 100
 MCTS_SIMS := 800
-BUFFER_CAP := 200000
+BUFFER_CAP := 500000
 
 # --- Web UI Configuration ---
 WEB_PORT := 4444
