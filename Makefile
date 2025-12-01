@@ -4,7 +4,7 @@ PYTHON ?= python3
 # --- Hardware & Compute ---
 GPUS ?= 1
 NUM_WORKERS ?= 32
-GAMES_PER_EPOCH := 1024
+GAMES_PER_EPOCH := 128
 
 # --- Model Architecture ("HUGE" Settings) ---
 MODEL_ARCH := conv
